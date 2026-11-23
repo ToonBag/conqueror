@@ -1,0 +1,403 @@
+{
+ "meshes": {
+  "SM_Wall_Plaster": "Walls",
+  "SM_Wall_Plaster_Patched": "Walls",
+  "SM_Wall_Brick": "Walls",
+  "SM_Wall_Plaster_Weakened": "Walls",
+  "SM_Wall_Plaster_Weakened_B": "Walls",
+  "SM_Wall_Pillar_Plaster": "Walls",
+  "SM_Wall_Pillar_Brick": "Walls",
+  "SM_Wall_Doorway_Plaster": "Walls",
+  "SM_Wall_Window_Plaster": "Walls",
+  "SM_Wall_Window_Brick": "Walls",
+  "SM_Wall_Window_Plaster_Broken": "Walls",
+  "SM_LowWall_Stone": "LowCover",
+  "SM_LowWall_Stone_Damaged": "LowCover",
+  "SM_LowWall_Brick": "LowCover",
+  "SM_Sandbags": "LowCover",
+  "SM_HayBale_Stack": "LowCover",
+  "SM_HayBale_Stack_B": "LowCover",
+  "SM_HayBale_Single": "LowCover",
+  "SM_HayPile_Loose": "LowCover",
+  "SM_CrateStack": "LowCover",
+  "SM_BarrelGroup": "LowCover",
+  "SM_Woodpile": "LowCover",
+  "SM_Tree_Oak": "Trees",
+  "SM_Tree_Apple": "Trees",
+  "SM_Tree_Poplar": "Trees",
+  "SM_Tree_Pine": "Trees",
+  "SM_Tree_Shattered": "Trees",
+  "SM_Tree_Stump": "Trees",
+  "SM_Bush": "Trees",
+  "SM_Hedge": "Trees",
+  "SM_Rubble_WallStub_A": "Rubble",
+  "SM_Rubble_WallStub_B": "Rubble",
+  "SM_Rubble_WallStub_C": "Rubble",
+  "SM_Rubble_Pile_A": "Rubble",
+  "SM_Rubble_Pile_B": "Rubble",
+  "SM_Rubble_Chunk_A": "Rubble",
+  "SM_Rubble_Chunk_B": "Rubble",
+  "SM_Rubble_Chunk_C": "Rubble",
+  "SM_Rubble_Chunk_D": "Rubble",
+  "SM_Well": "Props",
+  "SM_WaterTrough": "Props",
+  "SM_Crate": "Props",
+  "SM_Barrel": "Props",
+  "SM_CzechHedgehog": "Props",
+  "SM_Fence_Wood": "Props",
+  "SM_Truck_Cargo": "Vehicles",
+  "SM_Car_Utility": "Vehicles",
+  "SM_Tank_Wreck": "Vehicles",
+  "SM_Cart_Hay": "Vehicles",
+  "SM_Int_Table": "Interior",
+  "SM_Int_Chair": "Interior",
+  "SM_Int_Bench": "Interior",
+  "SM_Int_Bed": "Interior",
+  "SM_Int_Wardrobe": "Interior",
+  "SM_Int_Dresser": "Interior",
+  "SM_Int_Bookshelf": "Interior",
+  "SM_Int_Stove": "Interior",
+  "SM_Int_Fireplace": "Interior",
+  "SM_Int_Rug": "Interior",
+  "SM_Int_Piano": "Interior",
+  "SM_Int_Radio": "Interior",
+  "SM_Int_OilLamp": "Interior",
+  "SM_Int_Bucket": "Interior",
+  "SM_Int_Sacks": "Interior"
+ },
+ "materials": {
+  "M_Env_Plaster": {
+   "color": [
+    0.6738595407338318,
+    0.5870163508936885,
+    0.4200332886842154
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_PlasterDark": {
+   "color": [
+    0.34239163959260344,
+    0.28464669032765505,
+    0.20490176639819646
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Brick": {
+   "color": [
+    0.34239163959260344,
+    0.07828831963873101,
+    0.039681909478526005
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_BrickDark": {
+   "color": [
+    0.16264719366814206,
+    0.039681909478526005,
+    0.021980947079887205
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Stone": {
+   "color": [
+    0.31854677812509186,
+    0.29569980462568246,
+    0.24286681390410306
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_StoneDark": {
+   "color": [
+    0.15487248594976835,
+    0.147318999244498,
+    0.12596738774090202
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_StoneLight": {
+   "color": [
+    0.47699978456654196,
+    0.44798841244188325,
+    0.3672464682101826
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Rubble": {
+   "color": [
+    0.26327340845612224,
+    0.21404114048223255,
+    0.15487248594976835
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Soot": {
+   "color": [
+    0.01532520332062848,
+    0.01341174889765847,
+    0.011645430905844125
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Wood": {
+   "color": [
+    0.27383841647314605,
+    0.12596738774090202,
+    0.0432336359153358
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_WoodDark": {
+   "color": [
+    0.10048150993772331,
+    0.0432336359153358,
+    0.017389102368488736
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_WoodLight": {
+   "color": [
+    0.44798841244188325,
+    0.25295007623137683,
+    0.09462962659456918
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_WoodPaint": {
+   "color": [
+    0.07828831963873101,
+    0.147318999244498,
+    0.08898152563840141
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Hay": {
+   "color": [
+    0.7293470915734015,
+    0.5070785101492276,
+    0.13286832155381798
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_HayDark": {
+   "color": [
+    0.4200332886842154,
+    0.25295007623137683,
+    0.05087608817155679
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Bark": {
+   "color": [
+    0.09462962659456918,
+    0.05087608817155679,
+    0.024515013703524748
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_BarkDark": {
+   "color": [
+    0.033104766570885055,
+    0.021980947079887205,
+    0.01341174889765847
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Leaf": {
+   "color": [
+    0.09462962659456918,
+    0.20490176639819646,
+    0.039681909478526005
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_LeafDark": {
+   "color": [
+    0.0432336359153358,
+    0.11280478678675158,
+    0.024515013703524748
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_LeafLight": {
+   "color": [
+    0.18731666848765954,
+    0.31854677812509186,
+    0.06372379528489175
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Pine": {
+   "color": [
+    0.024515013703524748,
+    0.07323895587840543,
+    0.027211780951381357
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Apple": {
+   "color": [
+    0.47699978456654196,
+    0.021980947079887205,
+    0.010022825574869039
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Iron": {
+   "color": [
+    0.036306484118193906,
+    0.036306484118193906,
+    0.039681909478526005
+   ],
+   "metallic": 0.5,
+   "roughness": 0.85
+  },
+  "M_Env_Steel": {
+   "color": [
+    0.19599417930148813,
+    0.20490176639819646,
+    0.21404114048223255
+   ],
+   "metallic": 0.8,
+   "roughness": 0.45
+  },
+  "M_Env_Rust": {
+   "color": [
+    0.17064493581555268,
+    0.0549717326875717,
+    0.01960664851623822
+   ],
+   "metallic": 0.2,
+   "roughness": 0.85
+  },
+  "M_Env_VehiclePaint": {
+   "color": [
+    0.10653922395082352,
+    0.1192801876221121,
+    0.04696420068912289
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_VehicleDark": {
+   "color": [
+    0.04696420068912289,
+    0.05087608817155679,
+    0.024515013703524748
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Canvas": {
+   "color": [
+    0.26327340845612224,
+    0.23302199930143813,
+    0.12596738774090202
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Rubber": {
+   "color": [
+    0.008540382112116999,
+    0.008540382112116999,
+    0.008540382112116999
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Glass": {
+   "color": [
+    0.10653922395082352,
+    0.1788675039555289,
+    0.21404114048223255
+   ],
+   "metallic": 0.0,
+   "roughness": 0.15
+  },
+  "M_Env_Water": {
+   "color": [
+    0.01960664851623822,
+    0.04696420068912289,
+    0.0549717326875717
+   ],
+   "metallic": 0.0,
+   "roughness": 0.1
+  },
+  "M_Env_Sandbag": {
+   "color": [
+    0.40644830114675407,
+    0.31854677812509186,
+    0.16264719366814206
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Fabric": {
+   "color": [
+    0.7105664902244221,
+    0.6559306827469925,
+    0.5225215539683921
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_FabricRed": {
+   "color": [
+    0.26327340845612224,
+    0.030074104146591292,
+    0.021980947079887205
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_FabricBlue": {
+   "color": [
+    0.039681909478526005,
+    0.07323895587840543,
+    0.17064493581555268
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_FabricGreen": {
+   "color": [
+    0.07323895587840543,
+    0.13286832155381798,
+    0.0549717326875717
+   ],
+   "metallic": 0.0,
+   "roughness": 0.85
+  },
+  "M_Env_Brass": {
+   "color": [
+    0.6038273388553378,
+    0.34239163959260344,
+    0.07323895587840543
+   ],
+   "metallic": 0.7,
+   "roughness": 0.4
+  }
+ }
+}

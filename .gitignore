@@ -1,0 +1,38 @@
+# Unreal generated folders
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+**/Plugins/*/Binaries/
+**/Plugins/*/Intermediate/
+
+# IDE / solution files (regenerate via "Generate Visual Studio project files")
+.vs/
+.idea/
+.vscode/
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Build artifacts
+*.pdb
+*.obj
+*.dll
+*.exe
+*.lib
+*.exp
+*.ilk
+
+# Blender backups / Python cache
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
+
+# Local tool state
+.Aura/
+.claude/settings.local.json
