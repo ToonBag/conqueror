@@ -2,6 +2,7 @@
 
 #include "BreachableWall.h"
 #include "CoverData.h"
+#include "ExplosionFX.h"
 #include "Grenade.h"
 #include "GridManager.h"
 #include "KillFeedTypes.h"
@@ -288,9 +289,15 @@ void AC4Charge::ApplyStateVisuals()
 		Body->SetVisibility(false);
 		Light->SetVisibility(false);
 		if (HasLabel()) Label->SetVisibility(false);
+		// Cosmetic, local to each machine (none on a dedicated server). Its ground dust rolls out to the stun radius.
+		if (AExplosionFX::SpawnAt(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, ChargeHeight), 1.4f, StunRadius))
+		{
+			break;
+		}
+		// Placeholder when the effect assets are missing: orange ball, and the stun radius on the ground
+		// (cylinder is 100 cm across: scale = diameter in metres).
 		Blast->SetVisibility(true);
 		SetPartColor(Blast, this, FLinearColor(1.f, 0.45f, 0.05f));
-		// Stun radius on the ground (cylinder is 100 cm across: scale = diameter in metres).
 		StunRing->SetVisibility(true);
 		StunRing->SetAbsolute(false, true, false);
 		StunRing->SetWorldRotation(FRotator::ZeroRotator);

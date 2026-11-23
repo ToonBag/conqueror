@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.48 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.50 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.50):** Low-poly explosions (§2.1, §7.1, §7.2, cosmetic only). Grenades and C4 now go off with a flat-shaded explosion instead of an orange ball: a white flash with streaks, an orange fireball that burns down to soot, grey-brown smoke rising for about 4 s, dirt clods thrown up, low dust puffs rolling out along the ground to about the stun radius (in place of the old orange stun disc), and a scorch mark that fades after about 14 s. C4's is about 1.4 times larger. Each client draws its own; the dedicated server draws none. Blast rules and radii are unchanged.
 
 > **Changelog (v0.48):** Several squads per team (§4.1, §4.3, §11.1, §11.2; implementation of existing rules, no new numbers). A team can now hold more than one squad, one per player: a joining player takes the first squad of their team that no other player commands, and a player leaving hands only their own squad back to a bot. The squad cohesion limit (§4.3) holds each squad together, not the whole team. Every squad no player commands gets its own bot; a team's bots see each other's VP assignments and spread over the VPs, and won't grenade any friendly soldier. For testing, `squad.SquadsPerTeam` copies the level's squad into each deployment zone (Farmstead was built for 1 squad a side, §10.1). New AI test matches (§11.2) record every shot, hit, grenade blast, medkit, capture and stress level to files for balancing.
 
@@ -142,6 +144,7 @@ These are recommended mappings of design systems onto Unreal's framework; they g
 | **Grenades**                    | Server-simulated ballistic arc on grid; clients receive replicated projectile for visuals.                        |
 | **Soldier models / animation**  | `USkeletalMeshComponent` on the soldier pawn with a native `USoldierAnimInstance` that picks and cross-fades clips from replicated state (cosmetic only, not ticked on a dedicated server). Models, props and clips live in `USoldierVisualData` (`DA_SoldierVisuals`); rifle models on `UWeaponData`. Clips are hand-keyed by `SourceArt/Characters/Tools/build_soldier_anims.py`. |
 | **Cover / environment art**     | Low-poly static meshes built by `SourceArt/Environment/build_ww2_cover.py` (Blender) and imported to `/Game/Environment` by `import_cover_unreal.py`. Pivot at ground level in the centre of the footprint; one cell = 1 m; `UCX_` boxes for collision. `ACoverActor` draws each cell with an instanced mesh picked per cell from the per-type variant lists (`Cover|Visuals`). Cosmetic only. |
+| **Explosion effects**          | `AExplosionFX`, a local, non-replicated actor spawned by each client when a grenade or C4 goes off (never on a dedicated server). It is built from flat-shaded pieces made by `SourceArt/Effects/build_explosion_fx.py` (Blender) and imported to `/Game/Effects` by `import_explosion_fx_unreal.py`. One masked material, `M_FX_Master`, reads colour, glow and dithered fade from custom primitive data, so no material instances are needed. The meshes and material are referenced from `USoldierVisualData` (Effects). Debug: `squad.TestExplosion`, `squad.ExplosionFXFreeze`. Cosmetic only. |
 | **Combat audio**                | Cosmetic `PlaySoundAtLocation` where the shot, reload or blast is shown, with a shared `USoundAttenuation`. Rifle sounds on `UWeaponData`; explosion on `USoldierVisualData`. Source files in `SourceArt/Audio`, imported to `/Game/Audio`. |
 
 ## 3. Lobby & Social System

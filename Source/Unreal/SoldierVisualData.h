@@ -79,6 +79,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Audio")
 	TObjectPtr<class USoundBase> ExplosionSound;
 
+	/**
+	 * Low-poly explosion pieces for AExplosionFX (SourceArt/Effects/build_explosion_fx.py), each 1 m across.
+	 * Puff and Material are required; without them grenades and C4 fall back to a plain orange ball.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Effects")
+	TObjectPtr<UStaticMesh> ExplosionPuffMesh;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Effects")
+	TObjectPtr<UStaticMesh> ExplosionSpikeMesh;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Effects")
+	TObjectPtr<UStaticMesh> ExplosionClodMesh;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Effects")
+	TObjectPtr<UStaticMesh> ExplosionScorchMesh;
+
+	/** M_FX_Master: colour, glow and dithered opacity come from custom primitive data (set per piece). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Effects")
+	TObjectPtr<class UMaterialInterface> ExplosionMaterial;
+
 	/** Distance falloff for rifle, reload and explosion sounds (heard from the RTS camera). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Audio")
 	TObjectPtr<class USoundAttenuation> CombatSoundAttenuation;

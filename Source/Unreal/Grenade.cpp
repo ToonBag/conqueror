@@ -1,5 +1,6 @@
 #include "Grenade.h"
 
+#include "ExplosionFX.h"
 #include "GridManager.h"
 #include "Soldier.h"
 #include "SoldierData.h"
@@ -268,11 +269,16 @@ void AGrenade::Explode()
 	Phase = EPhase::Exploding;
 	PhaseTime = 0.f;
 	Body->SetVisibility(false);
-	Blast->SetVisibility(true);
-	StunRing->SetVisibility(true);
-	// Cylinder mesh is 100 cm across: scale = diameter in metres.
-	StunRing->SetRelativeLocation(FVector(0.f, 0.f, -GrenadeRestHeight + 1.f));
-	StunRing->SetRelativeScale3D(FVector(StunRadius * 2.f, StunRadius * 2.f, 0.01f));
+	// Cosmetic, local to each machine (none on a dedicated server). Its ground dust rolls out to the stun radius.
+	if (!AExplosionFX::SpawnAt(GetWorld(), Rest - FVector(0.f, 0.f, GrenadeRestHeight), 1.f, StunRadius))
+	{
+		// Placeholder when the effect assets are missing: orange ball and stun disc.
+		Blast->SetVisibility(GetNetMode() != NM_DedicatedServer);
+		StunRing->SetVisibility(GetNetMode() != NM_DedicatedServer);
+		// Cylinder mesh is 100 cm across: scale = diameter in metres.
+		StunRing->SetRelativeLocation(FVector(0.f, 0.f, -GrenadeRestHeight + 1.f));
+		StunRing->SetRelativeScale3D(FVector(StunRadius * 2.f, StunRadius * 2.f, 0.01f));
+	}
 	if (const USoldierVisualData* Visuals = USoldierVisualData::GetDefaultVisuals())
 	{
 		Visuals->PlayCombatSound(this, Visuals->ExplosionSound, Rest);
