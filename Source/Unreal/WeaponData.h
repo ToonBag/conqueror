@@ -45,6 +45,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon|Accuracy", meta = (ClampMin = "0", ClampMax = "100"))
 	float LongRangeAccuracy = 35.f;
 
+	/**
+	 * Projectile model only (squad.Ballistics 1, GDD §16): one-sigma angular error of a round fired standing and
+	 * unbraced by a calm, unhurt soldier, in milliradians (16 mrad = 32 cm at 20 m). The range-band accuracies
+	 * above are not used in that model.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon|Ballistics", meta = (ClampMin = "0.1"))
+	float SpreadMrad = 16.f;
+
 	/** Upper edge of the short range band, in metres. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon|Range", meta = (ClampMin = "0"))
 	float ShortRangeMax = 8.f;

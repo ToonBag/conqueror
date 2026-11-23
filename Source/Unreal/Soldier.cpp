@@ -1,4 +1,6 @@
 #include "Soldier.h"
+#include "Ballistics.h"
+#include "BallisticsData.h"
 
 #include "BreachableWall.h"
 #include "Grenade.h"
@@ -1228,6 +1230,7 @@ void ASoldier::Tick(float DeltaSeconds)
 	}
 	GrenadeCooldown = FMath::Max(0.f, GrenadeCooldown - DeltaSeconds);
 	UnderFireRemaining = FMath::Max(0.f, UnderFireRemaining - DeltaSeconds);
+	RecoilMrad = FMath::Max(0.f, RecoilMrad - UBallisticsSubsystem::GetData()->RecoilRecoveryMradPerSecond * DeltaSeconds);
 	DamageFlashRemaining = FMath::Max(0.f, DamageFlashRemaining - DeltaSeconds);
 	MessageRemaining = FMath::Max(0.f, MessageRemaining - DeltaSeconds);
 
@@ -2446,9 +2449,9 @@ void ASoldier::UpdateAutoTarget(float DeltaSeconds)
 			continue;
 		}
 		const FHitChanceInfo Chance = GetHitChanceAgainst(Other);
-		if (!Chance.CanFire())
+		if (!Chance.CanFire() || (Chance.bBallistic && Chance.ExposurePercent <= 0.f))
 		{
-			continue;
+			continue; // GDD §16: automatic fire only at enemies some part of which shows.
 		}
 		if (Chance.FinalChance > BestChance)
 		{
@@ -2532,6 +2535,11 @@ void ASoldier::UpdateAttack(float DeltaSeconds)
 	}
 
 	const FHitChanceInfo Chance = GetHitChanceAgainst(Target);
+	if (bAutoTarget && Chance.CanFire() && Chance.bBallistic && Chance.ExposurePercent <= 0.f)
+	{
+		ClearAttack(); // GDD §16: an automatic target that ducks fully behind cover is dropped until it shows again.
+		return;
+	}
 	if (!Chance.CanFire())
 	{
 		if (!bAutoTarget) // An automatic target just drops out of sight; only explicit orders report why.
@@ -2589,6 +2597,16 @@ FString FHitChanceInfo::Describe() const
 		return TEXT("NO LINE OF SIGHT");
 	}
 	const TCHAR* StressTag = StressAccuracyMultiplier < 1.f ? TEXT(" (STRESSED)") : TEXT("");
+	if (bBallistic)
+	{
+		// e.g. "34% - 40% EXPOSED (BRACED)"
+		if (ExposurePercent <= 0.f)
+		{
+			return FString::Printf(TEXT("%.0f%% - HIDDEN%s%s"), FinalChance, bBraced ? TEXT(" (BRACED)") : TEXT(""), StressTag);
+		}
+		return FString::Printf(TEXT("%.0f%% - %.0f%% EXPOSED%s%s"), FinalChance, ExposurePercent,
+			bBraced ? TEXT(" (BRACED)") : TEXT(""), StressTag);
+	}
 	if (Cover == ECoverType::None)
 	{
 		return FString::Printf(TEXT("%.0f%% EXPOSED%s"), FinalChance, StressTag);
@@ -2629,6 +2647,12 @@ FHitChanceInfo ASoldier::GetHitChanceAgainst(const ASoldier* Target) const
 		Info.CoverReduction = Cover.Reduction;
 		Info.bCoverLeaning = Cover.bLeaning;
 		Info.FinalChance = Grid->GetCoverData()->ApplyReduction(Info.BaseChance, Cover.Reduction);
+	}
+	// GDD §16: in the projectile model the chance is estimated from sampled rounds against the target's body;
+	// the grid cover above is kept only for stress and the readout's cover name.
+	if (Info.CanFire() && UBallisticsSubsystem::IsEnabled(this))
+	{
+		FillBallisticChance(*Target, Info);
 	}
 	return Info;
 }
@@ -2858,6 +2882,12 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 	--Inventory.Weapons[0].LoadedRounds; // Weapons[0] always exists after BeginPlay.
 	++ShotCount;
 	++RoundsFiredStat;
+
+	if (UBallisticsSubsystem::IsEnabled(this))
+	{
+		FireBallisticRound(Target, Chance); // GDD §16: a projectile instead of a roll.
+		return;
+	}
 
 	// GDD §5.3: roll 0..100,000 inclusive; hit if roll <= hit chance (0.001% resolution).
 	const int32 Roll = Rng.RandRange(0, 100000);

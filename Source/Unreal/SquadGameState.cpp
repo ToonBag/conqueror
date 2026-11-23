@@ -12,6 +12,7 @@ void ASquadGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(ASquadGameState, VPHoldRequired);
 	DOREPLIFETIME(ASquadGameState, WinningTeam);
 	DOREPLIFETIME(ASquadGameState, VictoryReason);
+	DOREPLIFETIME(ASquadGameState, bBallistics);
 }
 
 void ASquadGameState::AddKill(const FKillFeedEntry& Entry)

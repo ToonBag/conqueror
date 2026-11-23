@@ -391,7 +391,7 @@ void USoldierAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		{
 			ClipCache[i] = Visuals->GetClip(static_cast<ESoldierClip>(i));
 		}
-		LastStance = Soldier->GetEffectiveStance();
+		LastStance = Soldier->GetPostureStance();
 	}
 
 	// Ground speed drives the movement clips' play rate so feet keep pace with the grid movement.
@@ -404,7 +404,7 @@ void USoldierAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	LastLocation = Location;
 	bHasLastLocation = true;
 
-	const ESoldierStance Stance = Soldier->GetEffectiveStance();
+	const ESoldierStance Stance = Soldier->GetPostureStance();
 
 	if (Soldier->IsDead())
 	{

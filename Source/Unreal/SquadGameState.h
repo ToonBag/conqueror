@@ -72,6 +72,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Match")
 	float GetVPHoldRemaining() const { return FMath::Max(0.f, VPHoldRequired - VPHoldElapsed); }
 
+	/** The server runs the experimental projectile model (squad.Ballistics 1, GDD §16). Set by UBallisticsSubsystem. */
+	UPROPERTY(Replicated)
+	bool bBallistics = false;
+
 private:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastKill(const FKillFeedEntry& Entry);

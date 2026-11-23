@@ -7,7 +7,10 @@
 #include "LootTypes.h"
 #include "KillFeedTypes.h"
 #include "BuildableTypes.h"
+#include "BallisticsTypes.h"
 #include "Soldier.generated.h"
+
+struct FBallisticRound;
 
 class ABreachableWall;
 class ASoldier;
@@ -51,6 +54,18 @@ struct FHitChanceInfo
 	float DistanceMetres = 0.f;
 	bool bInRange = false;
 	bool bLineOfSight = true;
+
+	// Projectile model (squad.Ballistics 1, GDD §16). FinalChance is then an estimate from sampled rounds.
+	bool bBallistic = false;
+	/** Share of the target's body (area-weighted) the shooter's muzzle has a clear line to, percent. */
+	float ExposurePercent = 0.f;
+	/** Shooter's one-sigma spread right now (mrad), recoil included. */
+	float SpreadMrad = 0.f;
+	/** Shooter rests its rifle on low cover. */
+	bool bBraced = false;
+	/** Where the shooter aims: the centre of the target's most visible body part. */
+	FVector AimPoint = FVector::ZeroVector;
+	EHitPart AimPart = EHitPart::Chest;
 
 	bool CanFire() const { return bInRange && bLineOfSight; }
 
@@ -793,6 +808,32 @@ public:
 	/** Show a line of text on this soldier's status label for the next fraction of a second (hover readouts). */
 	void ShowHitPreview(const FString& Text);
 
+	// ---------------------------------------------------------------- Projectile model (GDD §16, SoldierBallistics.cpp)
+
+	/**
+	 * Resting the rifle on low cover (hay, low wall, window sill): projectile model only, standing still, facing
+	 * the cover, not prone. OutCoverTop: height of the cover's top above the ground; OutTowardCover: unit vector.
+	 */
+	bool IsBraced(float* OutCoverTop = nullptr, FVector* OutTowardCover = nullptr) const;
+
+	/** Posture to animate: crouched while braced, else GetEffectiveStance. */
+	ESoldierStance GetPostureStance() const;
+
+	/** World-space hit spheres for the current posture (same on server and clients). Empty when dead. */
+	void GetHitShapes(FBallisticShapes& OutShapes) const;
+
+	/** Where this soldier's rounds start when firing towards Toward (analytic, so it works on a dedicated server). */
+	FVector GetBallisticMuzzle(const FVector& Toward) const;
+
+	/** One-sigma angular error of the next round (mrad): weapon x posture x stress x injury + recoil. */
+	float GetBallisticSpreadMrad() const;
+
+	/** Server: a round fired by this soldier stopped (or ran out of range). Applies hits, stats and the tracer. */
+	void OnBallisticRoundResolved(const FBallisticRound& Round, const FBallisticTrace& Hit);
+
+	/** Server: an enemy round passed close by (GDD §16 stress). */
+	void OnBallisticNearMiss(const ASoldier* Shooter);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -1078,6 +1119,12 @@ private:
 	bool bModelTintedAsCorpse = false;
 	float TracerRemaining = 0.f;
 	FRandomStream Rng;
+
+	// Projectile model (SoldierBallistics.cpp).
+	/** Server: recoil building up from rounds fired (mrad), recovering over time. */
+	float RecoilMrad = 0.f;
+	void FillBallisticChance(const ASoldier& Target, FHitChanceInfo& Info) const;
+	void FireBallisticRound(ASoldier* Target, const FHitChanceInfo& Chance);
 
 	// Dragging: the soldier this one is pulling, and the one pulling this one.
 	TWeakObjectPtr<ASoldier> DraggedSoldier;

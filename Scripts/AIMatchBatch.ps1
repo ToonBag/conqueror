@@ -13,6 +13,7 @@
   ./Scripts/AIMatchBatch.ps1 -Matches 20 -Parallel 4  # more, four at a time
   ./Scripts/AIMatchBatch.ps1 -SquadsPerTeam 1         # 1v1 squads
   ./Scripts/AIMatchBatch.ps1 -SwapSides               # Axis start south, Allies north (map-bias test)
+  ./Scripts/AIMatchBatch.ps1 -Ballistics              # experimental projectile combat (GDD §16)
 #>
 param(
     [int]$Matches = 10,
@@ -21,6 +22,7 @@ param(
     [int]$SeedBase = 1000,
     [int]$TimeLimit = 2400,      # game seconds before a match is recorded as a timeout
     [switch]$SwapSides,          # each faction starts in the other's deployment zone (map-bias test)
+    [switch]$Ballistics,         # squad.Ballistics 1: projectile combat instead of hit-chance rolls (GDD §16)
     [string]$Map = "/Game/Maps/Farmstead",
     [int]$BasePort = 17800,
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
@@ -39,7 +41,7 @@ function Start-Match([int]$i) {
         "-benchmark", "-fps=30", "-log", "-abslog=`"$(Join-Path $LogDir "AIMatch_$seed.log")`"",
         "${cv}squad.SquadsPerTeam=$SquadsPerTeam", "${cv}squad.MinPlayers=0", "${cv}squad.MatchStats=1",
         "${cv}squad.QuitAfterMatch=1", "${cv}squad.MatchSeed=$seed", "${cv}squad.MatchTimeLimit=$TimeLimit",
-        "${cv}squad.SwapSides=$([int][bool]$SwapSides)")
+        "${cv}squad.SwapSides=$([int][bool]$SwapSides)", "${cv}squad.Ballistics=$([int][bool]$Ballistics)")
     $p = Start-Process $Editor -PassThru -WindowStyle Hidden -ArgumentList $argv
     Write-Host "match $i  seed $seed  pid $($p.Id)"
     return $p

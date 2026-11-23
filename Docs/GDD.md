@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.50 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.51 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.51, `ballistics-prototype` branch only):** Experimental projectile combat (§16, new), off by default behind `squad.Ballistics 1`. Every rifle round is a server-simulated projectile that leaves the muzzle with a random angular spread and stops on the ground, on cover or on a soldier's body parts, so cover protects by physically hiding the body and the angle of fire matters. Soldiers brace on low cover (crouched, rifle on top, head showing) and duck while reloading. Friendly rounds injure but never kill. Rounds passing close stress soldiers. The hit-chance roll (§5.3) and flat cover reductions (§9.1) are unchanged and still used with the switch off. AI test matches take `-Ballistics` (§11.2).
 
 > **Changelog (v0.50):** Low-poly explosions (§2.1, §7.1, §7.2, cosmetic only). Grenades and C4 now go off with a flat-shaded explosion instead of an orange ball: a white flash with streaks, an orange fireball that burns down to soot, grey-brown smoke rising for about 4 s, dirt clods thrown up, low dust puffs rolling out along the ground to about the stun radius (in place of the old orange stun disc), and a scorch mark that fades after about 14 s. C4's is about 1.4 times larger. Each client draws its own; the dedicated server draws none. Blast rules and radii are unchanged.
 
@@ -606,6 +608,7 @@ Bot-only matches on a dedicated server with no clients, recorded for balancing. 
 - `squad.MatchStats 1` — the server writes `Saved/MatchStats/<time>_seed<n>.json` (result, per-soldier and per-team totals, events) and `_shots.csv` (every shot: positions, range, stance, cover, hit chance, roll, result).
 - `squad.MatchTimeLimit <s>` ends the record as a timeout; `squad.QuitAfterMatch 1` closes the server after writing it.
 - `squad.SwapSides 1` — each faction starts in the other's deployment zone with its own rifles (tells a map-side bias from a faction bias).
+- `squad.Ballistics 1` (`AIMatchBatch.ps1 -Ballistics`) — experimental projectile combat (§16). Shot rows then carry the estimated chance, a roll of -1 and where the round went; the JSON adds friendly-fire, stray-hit, rounds-stopped-by-cover and hit-part counts per team.
 
 The bots decide these matches, so the numbers show how the rules play under bot tactics, not under skilled players.
 
@@ -793,3 +796,48 @@ Because the game relies on deterministic grid movement, true RNG shot calculatio
 - Unit Customisation.
 - Additional Maps & further Cover Destruction (weakened walls that can be breached are in, §9.4; destroying other cover such as hay bales, low walls or trees is not).
 - Spectator Mode & Replay System (Unreal's built-in Replay/DemoNetDriver is a candidate).
+
+## 16. Experimental: Projectile Combat (prototype)
+
+_Prototype on the `ballistics-prototype` branch, off by default. With the server cvar `squad.Ballistics 1` it replaces the hit-chance roll (§5.3) and the flat cover reductions (§9.1) for rifle and machine-gun fire; everything else (sight lines §9.3, movement, grenades, stress tiers, injuries) is unchanged. All values are starting points for tuning and live in `UBallisticsData` (spread multipliers, posture, flight, friendly fire) and `UWeaponData::SpreadMrad`._
+
+### 16.1 Rounds
+
+- Every round is its own projectile, simulated on the dedicated server only. It leaves the muzzle at **850 m/s**, stepped each server tick, and stops at the first thing it touches: the ground, cover, or a soldier. A round that touches nothing is dropped after **60 m**.
+- Cover uses the same shapes and heights as grenade collision (§7): walls, windows and bales are slabs across their cells; low walls stop rounds below **90 cm**, hay bales below **75 cm**, window walls everywhere except the opening (sill **90 cm** to top **200 cm**); full walls and corners stop everything; a tree stops rounds on its trunk (radius **22 cm**) below its canopy height.
+- Hay is soft: a round has a **70%** chance to pass through each bale cell it crosses.
+- No bullet drop at these ranges. Clients draw the tracer from the muzzle to where the round stopped, and play the shot when the round lands (about 0.01–0.05 s after firing).
+
+### 16.2 Body and posture
+
+- Each soldier has six hit spheres (head, chest, belly, hips, thighs, shins) placed by its posture: standing, crouched, prone, braced or leaning out. They are worked out from replicated state, so server and clients agree.
+- **Braced:** a soldier standing still, not prone, and leaning on low cover (hay bale, low wall, window sill, §9.2) crouches and rests its rifle on top. Its head shows **18 cm** above the top of the cover, its shoulders just reach it, and the rest is hidden. It is drawn crouched. While reloading it **ducks** fully below the cover (**45 cm** lower).
+- **Leaning out** past a wall's edge (§9.2): the head moves **62 cm** sideways past the wall's end, the chest 60% of that, the belly 30%, the hips and legs not at all.
+- Injured and stunned soldiers are prone (§5.1), so they lie low behind cover.
+
+### 16.3 Spread
+
+- Each round leaves with a random angular error, normal in both directions. One-sigma spread = weapon spread × posture × stress × injury, plus recoil:
+  - Weapon: **16 mrad** for every rifle and machine gun for now (32 cm at 20 m).
+  - Posture: braced **×0.6**, crouched **×0.8**, prone **×0.7**, standing ×1.
+  - Stress: × (1 / the tier's accuracy multiplier, §8.1): ×1 / ×1.05 / ×1.33 / ×2 from Calm to Shocked.
+  - Injured: **×1.5**.
+  - Recoil: **+2 mrad** per round, recovering **8 mrad/s**, at most **10 mrad**.
+- The soldier aims where most of the target's visible body lies within its spread at that range: a head over a wall, a soldier's chest in the open.
+
+### 16.4 Hit chance shown
+
+- The hit chance in the HUD, used for automatic targeting and by the bots, is an estimate: 32 sample rounds spread in a fixed pattern are traced against the target as it stands now, and the share that reach it is the chance. The readout also shows how much of the target is exposed, e.g. "28% - 14% EXPOSED (BRACED)".
+- Automatic target choice (§5.3) ignores enemies with nothing showing, and drops an automatic target that ducks fully out of sight; an explicit attack order still fires at a hidden target.
+
+### 16.5 Hits, friendly fire and stress
+
+- A round that reaches an enemy hits it with the usual effects (§5.1: injured, or killed if already injured or within 5 m). It may hit an enemy it wasn't aimed at.
+- **Friendly fire:** a round that reaches a soldier of the shooter's own team injures it if it is unhurt, and never kills. Every friendly and stray hit is recorded in AI test matches (§11.2) so how often it happens can be tracked.
+- **Stress (replaces "every round fired at a soldier", §8.2):** every enemy within **1.5 m** of a round's path (including where it stopped) gains the incoming-shot stress once per round, reduced by its cover against the shooter as before. Crossfire stress (§8.2) is unchanged.
+
+### 16.6 Open questions
+
+- Spread values per weapon (machine guns currently use the rifle value).
+- Injured-only stalemates (§11.2 review) happen more often: 6 of 20 test matches timed out, against 2 of 20 with hit-chance rolls on the same seeds. Prone soldiers behind cover are hard to hit.
+- Whether soldiers should stay braced while being shot at, or duck on their own under heavy fire.

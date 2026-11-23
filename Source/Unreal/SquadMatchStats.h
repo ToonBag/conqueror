@@ -4,6 +4,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "KillFeedTypes.h"
 #include "SquadTypes.h"
+#include "BallisticsTypes.h"
 #include "SquadMatchStats.generated.h"
 
 class ASoldier;
@@ -43,6 +44,15 @@ public:
 	void RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit);
 	/** After a rifle hit: Outcome "injured", "killed" or "none" (invulnerable / already dead). */
 	void RecordHitOutcome(const FString& Outcome);
+	/**
+	 * Projectile model (GDD §16): one row per round when it stops. bHitTarget: it hit the soldier aimed at, and
+	 * Outcome is "injured" / "killed" / "none"; otherwise Outcome says where it went ("miss_cover",
+	 * "miss_ground", "miss_lost", "stray_enemy", "friendly").
+	 */
+	void RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
+		EHitPart Part, const FString& Outcome);
+	/** Projectile model: a round hit a soldier it was not aimed at. Effect: "injured", "killed" or "none". */
+	void RecordStrayHit(const ASoldier& Shooter, const ASoldier& Victim, bool bFriendly, float DistanceMetres, const FString& Effect);
 	void RecordGrenadeThrown(const ASoldier& Thrower, FIntPoint From, FIntPoint Target);
 	void RecordDeath(const ASoldier& Victim, const FKillCause& Cause);
 	void RecordBlastVictim(const ASoldier* Instigator, EKillMethod Method, const ASoldier& Victim, const TCHAR* Effect);
@@ -94,4 +104,11 @@ private:
 	int32 BlastStuns[2] = { 0, 0 };
 	int32 FriendlyBlastCasualties[2] = { 0, 0 };
 	int32 VPCaptures[2] = { 0, 0 };
+	/** Projectile model, per shooter's team. */
+	bool bBallisticsMatch = false;
+	int32 FriendlyFireHits[2] = { 0, 0 };
+	int32 FriendlyFireInjuries[2] = { 0, 0 };
+	int32 StrayEnemyHits[2] = { 0, 0 };
+	int32 HitParts[2][6] = { { 0 } };
+	int32 RoundsStoppedByCover[2] = { 0, 0 };
 };

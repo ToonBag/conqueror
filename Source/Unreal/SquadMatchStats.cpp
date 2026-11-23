@@ -191,6 +191,54 @@ void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Targe
 	}
 }
 
+void USquadMatchStats::RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
+	EHitPart Part, const FString& Outcome)
+{
+	if (bWritten)
+	{
+		return;
+	}
+	bBallisticsMatch = true;
+	RecordShot(Shooter, Target, Chance, -1.f, bHitTarget);
+	ShotRows.Last() += Outcome;
+	PendingOutcomeRow = INDEX_NONE;
+	const int32 T = TeamIdx(Shooter.Team);
+	if (bHitTarget)
+	{
+		HitParts[T][static_cast<int32>(Part)]++;
+	}
+	else if (Outcome == TEXT("miss_cover"))
+	{
+		RoundsStoppedByCover[T]++;
+	}
+}
+
+void USquadMatchStats::RecordStrayHit(const ASoldier& Shooter, const ASoldier& Victim, bool bFriendly, float DistanceMetres, const FString& Effect)
+{
+	if (bWritten)
+	{
+		return;
+	}
+	const int32 T = TeamIdx(Shooter.Team);
+	FSoldierRecord& V = Find(Victim);
+	V.HitsTaken++;
+	if (Effect == TEXT("injured"))
+	{
+		V.TimesInjured++;
+	}
+	if (bFriendly)
+	{
+		FriendlyFireHits[T]++;
+		FriendlyFireInjuries[T] += Effect == TEXT("injured") ? 1 : 0;
+	}
+	else
+	{
+		StrayEnemyHits[T]++;
+	}
+	Events.Add(FString::Printf(TEXT("%.1f %s %s hits %s at %.1fm: %s"), MatchTime(), bFriendly ? TEXT("friendly_fire") : TEXT("stray_round"),
+		*SoldierId(Shooter), *SoldierId(Victim), DistanceMetres, *Effect));
+}
+
 void USquadMatchStats::RecordHitOutcome(const FString& Outcome)
 {
 	if (ShotRows.IsValidIndex(PendingOutcomeRow))
@@ -323,6 +371,7 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("map"), World ? World->GetMapName() : FString());
 	Root->SetNumberField(TEXT("seed"), MatchSeed);
+	Root->SetBoolField(TEXT("ballistics"), bBallisticsMatch);
 	Root->SetNumberField(TEXT("squads_per_team"), NumSquadsPerTeam);
 	Root->SetNumberField(TEXT("duration_s"), MatchTime());
 	Root->SetStringField(TEXT("reason"), Reason);
@@ -350,6 +399,19 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 		J->SetNumberField(TEXT("blast_stuns"), BlastStuns[T]);
 		J->SetNumberField(TEXT("friendly_blast_casualties"), FriendlyBlastCasualties[T]);
 		J->SetNumberField(TEXT("vp_captures"), VPCaptures[T]);
+		if (bBallisticsMatch)
+		{
+			J->SetNumberField(TEXT("friendly_fire_hits"), FriendlyFireHits[T]);
+			J->SetNumberField(TEXT("friendly_fire_injuries"), FriendlyFireInjuries[T]);
+			J->SetNumberField(TEXT("stray_enemy_hits"), StrayEnemyHits[T]);
+			J->SetNumberField(TEXT("rounds_stopped_by_cover"), RoundsStoppedByCover[T]);
+			TSharedRef<FJsonObject> Parts = MakeShared<FJsonObject>();
+			for (int32 P = 0; P < 6; ++P)
+			{
+				Parts->SetNumberField(GetHitPartName(static_cast<EHitPart>(P)), HitParts[T][P]);
+			}
+			J->SetObjectField(TEXT("target_hit_parts"), Parts);
+		}
 		TeamArray.Add(MakeShared<FJsonValueObject>(J));
 	}
 	Root->SetArrayField(TEXT("teams"), TeamArray);
