@@ -3,6 +3,7 @@
 #include "GridManager.h"
 #include "MapZoneColors.h"
 #include "Soldier.h"
+#include "SquadMatchStats.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
@@ -128,6 +129,13 @@ void AVictoryPoint::UpdateOwnership()
 		{
 			UE_LOG(LogVictoryPoint, Log, TEXT("Victory point %s captured by %s"), *PointName.ToString(),
 				NewTeam == ESquadTeam::Allies ? TEXT("Allies") : TEXT("Axis"));
+		}
+		if (bNewOwned && (!bOwned || NewTeam != OwningTeam))
+		{
+			if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+			{
+				Stats->RecordVPCapture(*this, NewTeam);
+			}
 		}
 		bOwned = bNewOwned;
 		OwningTeam = NewTeam;

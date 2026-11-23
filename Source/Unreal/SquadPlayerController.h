@@ -64,10 +64,17 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerTeam, EditAnywhere, BlueprintReadOnly, Category = "Squad")
 	ESquadTeam PlayerTeam = ESquadTeam::Allies;
 
+	/** Which of PlayerTeam's squads this player commands (ASoldier::SquadId; one squad per player, GDD §4.1). */
+	UPROPERTY(ReplicatedUsing = OnRep_PlayerTeam, EditAnywhere, BlueprintReadOnly, Category = "Squad")
+	int32 PlayerSquadId = 0;
+
+	/** True if Soldier is in this player's own squad (team and squad). */
+	bool IsOwnSquad(const ASoldier* Soldier) const { return Soldier && Soldier->Team == PlayerTeam && Soldier->SquadId == PlayerSquadId; }
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** Server: put this player on Team and give it that team's squad. */
-	void AssignTeam(ESquadTeam Team);
+	/** Server: put this player on Team and give it that team's squad SquadId. */
+	void AssignTeam(ESquadTeam Team, int32 SquadId = 0);
 
 	/**
 	 * Client: send Order to the server on this controller's next tick. Queued rather than sent at once so an order

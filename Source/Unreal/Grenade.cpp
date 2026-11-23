@@ -4,6 +4,7 @@
 #include "Soldier.h"
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
+#include "SquadMatchStats.h"
 #include "Algo/AllOf.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -295,6 +296,7 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 		return;
 	}
 	const AGridManager* Grid = bCoverShields ? AGridManager::Find(World) : nullptr;
+	USquadMatchStats* Stats = USquadMatchStats::Get(World);
 	FIntPoint BlastCell = FIntPoint::ZeroValue;
 	const bool bShieldable = Grid && Grid->WorldToCell(Origin, BlastCell);
 
@@ -329,6 +331,7 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 				continue;
 			}
 		}
+		const TCHAR* Effect = nullptr;
 		if (Metres <= InKillRadius)
 		{
 			if (FMath::FRand() < InKillChance)
@@ -338,15 +341,22 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 				Cause.Method = Method;
 				Cause.ChancePercent = InKillChance * 100.f;
 				Soldier->Die(Cause);
+				Effect = TEXT("killed");
 			}
 			else
 			{
 				Soldier->ApplyStun(InCloseStunDuration);
+				Effect = TEXT("stunned_close");
 			}
 		}
 		else if (Metres <= InStunRadius)
 		{
 			Soldier->ApplyStun(InStunDuration);
+			Effect = TEXT("stunned");
+		}
+		if (Stats && Effect)
+		{
+			Stats->RecordBlastVictim(Instigator, Method, *Soldier, Effect);
 		}
 	}
 }

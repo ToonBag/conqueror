@@ -1,10 +1,13 @@
 #include "SquadGameMode.h"
 
+#include "DeploymentZone.h"
+#include "GridManager.h"
 #include "Soldier.h"
 #include "SquadBot.h"
 #include "SquadCameraPawn.h"
 #include "SquadGameState.h"
 #include "SquadHUD.h"
+#include "SquadMatchStats.h"
 #include "SquadPlayerController.h"
 #include "SquadPlayerState.h"
 #include "TacticalPlan.h"
@@ -22,6 +25,21 @@ namespace
 	TAutoConsoleVariable<int32> CVarMinPlayers(
 		TEXT("squad.MinPlayers"), 1,
 		TEXT("Dedicated server: players who must have joined before the match starts and bots take empty teams (default 1)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarSquadsPerTeam(
+		TEXT("squad.SquadsPerTeam"), 1,
+		TEXT("Squads per team (one per player, GDD §4.1). Above 1 the game mode copies the level's squad into each deployment zone when the map loads; empty squads get bots. Set before the map loads."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarSwapSides(
+		TEXT("squad.SwapSides"), 0,
+		TEXT("Balancing test (server): each faction starts in the other's deployment zone, with its own rifles. Set before the map loads."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarMatchSeed(
+		TEXT("squad.MatchSeed"), 0,
+		TEXT("Seed for the bots' choices and every soldier's hit rolls, for reproducible test matches (0: a new random seed each match)."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> CVarVPWinTime(
@@ -67,13 +85,31 @@ void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
 			Team = Candidate;
 		}
 	}
-	PC->AssignTeam(Team);
-	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"), TeamName(Team));
-
-	// A player joining a bot-run team takes the squad over.
-	if (ASquadBot* Bot = ASquadBot::FindForTeam(this, Team))
+	// One squad per player (GDD §4.1): the team's first squad no other player commands.
+	const TSet<int32> Commanded = GetCommandedSquads(PC);
+	int32 SquadId = 0;
+	bool bFreeSquad = false;
+	for (const int32 Candidate : GetSquadIds(Team))
 	{
-		UE_LOG(LogSquadMatch, Log, TEXT("The %s AI bot hands its squad to the player."), TeamName(Team));
+		if (!Commanded.Contains(SquadKey(Team, Candidate)))
+		{
+			SquadId = Candidate;
+			bFreeSquad = true;
+			break;
+		}
+	}
+	if (!bFreeSquad)
+	{
+		UE_LOG(LogSquadMatch, Warning, TEXT("Every %s squad already has a player; this player shares squad 1."), TeamName(Team));
+	}
+	PC->AssignTeam(Team, SquadId);
+	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s (squad %d)."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"),
+		TeamName(Team), SquadId + 1);
+
+	// A player joining a bot-run squad takes it over.
+	if (ASquadBot* Bot = ASquadBot::FindForSquad(this, Team, SquadId))
+	{
+		UE_LOG(LogSquadMatch, Log, TEXT("The %s squad %d AI bot hands its squad to the player."), TeamName(Team), SquadId + 1);
 		Bot->Destroy();
 	}
 	if (bMatchStarted)
@@ -86,22 +122,215 @@ void ASquadGameMode::Logout(AController* Exiting)
 {
 	const ASquadPlayerController* PC = Cast<ASquadPlayerController>(Exiting);
 	Super::Logout(Exiting);
-	if (PC && bMatchStarted && !bMatchEnded && bSpawnBotsForUncommandedTeams && CountPlayers(PC->PlayerTeam, PC) == 0)
+	if (PC && bMatchStarted && !bMatchEnded && bSpawnBotsForUncommandedTeams)
 	{
-		UE_LOG(LogSquadMatch, Log, TEXT("Every %s player has left."), TeamName(PC->PlayerTeam));
-		SpawnBots(PC);
+		UE_LOG(LogSquadMatch, Log, TEXT("The %s squad %d player has left."), TeamName(PC->PlayerTeam), PC->PlayerSquadId + 1);
+		SpawnBots(PC); // Their squad goes back to a bot.
 	}
+}
+
+void ASquadGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+	if (CVarSwapSides.GetValueOnGameThread() != 0)
+	{
+		SwapSides();
+	}
+	// Before anyone logs in, so joining players can be given any of the squads.
+	SpawnExtraSquads();
 }
 
 void ASquadGameMode::StartMatch()
 {
 	bMatchStarted = true;
 	UE_LOG(LogSquadMatch, Log, TEXT("Match starts with %d player(s)."), GetNumPlayers());
+
+	// Reproducible test matches: one seed drives the bots' choices (FMath) and every soldier's hit rolls.
+	MatchSeed = CVarMatchSeed.GetValueOnGameThread();
+	if (MatchSeed == 0)
+	{
+		MatchSeed = static_cast<int32>(FPlatformTime::Cycles() & 0x7fffffff) | 1;
+	}
+	FMath::RandInit(MatchSeed);
+	FMath::SRandInit(MatchSeed);
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		It->SeedRandom(FMath::Rand());
+	}
+	UE_LOG(LogSquadMatch, Log, TEXT("Match seed %d (squad.MatchSeed)."), MatchSeed);
+
 	SpawnTacticalPlans();
 	GiveTestMachineGuns();
 	if (bSpawnBotsForUncommandedTeams)
 	{
 		SpawnBots();
+	}
+	if (USquadMatchStats* Stats = GetWorld()->GetSubsystem<USquadMatchStats>())
+	{
+		Stats->OnMatchStarted(MatchSeed, NumSquadsPerTeam);
+	}
+}
+
+TArray<int32> ASquadGameMode::GetSquadIds(ESquadTeam Team) const
+{
+	TArray<int32> Ids;
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		if (It->Team == Team)
+		{
+			Ids.AddUnique(It->SquadId);
+		}
+	}
+	Ids.Sort();
+	return Ids;
+}
+
+TSet<int32> ASquadGameMode::GetCommandedSquads(const AController* Except) const
+{
+	TSet<int32> Commanded;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()); PC && PC != Except)
+		{
+			Commanded.Add(SquadKey(PC->PlayerTeam, PC->PlayerSquadId));
+		}
+	}
+	return Commanded;
+}
+
+void ASquadGameMode::SwapSides()
+{
+	// Balancing test: each faction starts in the other's deployment zone, keeping its own rifle, colour and
+	// uniform, so a side bias can be told apart from a faction bias. Server-only: clients still label the zones
+	// the old way.
+	TMap<ESquadTeam, TArray<ASoldier*>> ByTeam;
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		ByTeam.FindOrAdd(It->Team).Add(*It);
+	}
+	TArray<ASoldier*>& Allies = ByTeam.FindOrAdd(ESquadTeam::Allies);
+	TArray<ASoldier*>& Axis = ByTeam.FindOrAdd(ESquadTeam::Axis);
+	auto BySquadIndex = [](const ASoldier& A, const ASoldier& B) { return A.SquadIndex < B.SquadIndex; };
+	Allies.Sort(BySquadIndex);
+	Axis.Sort(BySquadIndex);
+	if (Allies.Num() != Axis.Num())
+	{
+		UE_LOG(LogSquadMatch, Warning, TEXT("squad.SwapSides: squads differ in size; sides not swapped."));
+		return;
+	}
+	for (int32 I = 0; I < Allies.Num(); ++I)
+	{
+		ASoldier* A = Allies[I];
+		ASoldier* X = Axis[I];
+		Swap(A->Weapon, X->Weapon);
+		Swap(A->VisualData, X->VisualData);
+		Swap(A->SoldierColor, X->SoldierColor);
+		A->Team = ESquadTeam::Axis;
+		X->Team = ESquadTeam::Allies;
+		for (ASoldier* S : { A, X })
+		{
+			if (S->HasActorBegunPlay() && S->Weapon)
+			{
+				S->EquipStartingWeapon(S->Weapon); // Its loadout was handed out with the old rifle.
+			}
+			S->OnConstruction(S->GetActorTransform()); // Colour, labels and uniform for the new team.
+		}
+	}
+	for (TActorIterator<ADeploymentZone> It(GetWorld()); It; ++It)
+	{
+		It->Team = It->Team == ESquadTeam::Allies ? ESquadTeam::Axis : ESquadTeam::Allies;
+	}
+	UE_LOG(LogSquadMatch, Log, TEXT("squad.SwapSides: Allies start in the north, Axis in the south."));
+}
+
+void ASquadGameMode::SpawnExtraSquads()
+{
+	const int32 Wanted = FMath::Max(1, CVarSquadsPerTeam.GetValueOnGameThread());
+	NumSquadsPerTeam = Wanted;
+	if (Wanted <= 1)
+	{
+		return;
+	}
+	const AGridManager* Grid = AGridManager::Find(this);
+	if (!Grid)
+	{
+		UE_LOG(LogSquadMatch, Warning, TEXT("squad.SquadsPerTeam %d: no GridManager, no extra squads."), Wanted);
+		return;
+	}
+	for (const ESquadTeam Team : GetSquadTeams())
+	{
+		// The level's squad is the template: same soldiers, data assets and look.
+		TArray<ASoldier*> Template;
+		for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+		{
+			if (It->Team == Team && It->SquadId == 0)
+			{
+				Template.Add(*It);
+			}
+		}
+		Template.Sort([](const ASoldier& A, const ASoldier& B) { return A.SquadIndex < B.SquadIndex; });
+		const ADeploymentZone* DZ = ADeploymentZone::FindForTeam(this, Team);
+		if (Template.Num() == 0 || !DZ)
+		{
+			UE_LOG(LogSquadMatch, Warning, TEXT("squad.SquadsPerTeam: the %s have no squad or deployment zone to copy."), TeamName(Team));
+			continue;
+		}
+
+		// Free cells of the deployment zone, rows nearest the team's own map edge first (GDD §10.4).
+		TArray<FIntPoint> Free;
+		const FIntPoint Min = DZ->GetMinCell();
+		for (int32 Y = 0; Y < DZ->SizeY; ++Y)
+		{
+			for (int32 X = 0; X < DZ->SizeX; ++X)
+			{
+				const FIntPoint Cell = Min + FIntPoint(X, Y);
+				if (Grid->IsInBounds(Cell) && Grid->IsCellFreeAsDestination(Cell))
+				{
+					Free.Add(Cell);
+				}
+			}
+		}
+		const float MapMidY = Grid->GridSizeY * 0.5f;
+		Free.Sort([MapMidY](const FIntPoint& A, const FIntPoint& B)
+		{
+			const float DA = FMath::Abs(A.Y - MapMidY), DB = FMath::Abs(B.Y - MapMidY);
+			return DA != DB ? DA > DB : A.X < B.X;
+		});
+
+		int32 NextFree = 0;
+		for (int32 SquadId = 1; SquadId < Wanted; ++SquadId)
+		{
+			for (const ASoldier* Source : Template)
+			{
+				if (!Free.IsValidIndex(NextFree))
+				{
+					UE_LOG(LogSquadMatch, Warning, TEXT("squad.SquadsPerTeam: the %s deployment zone is full; squad %d is short."), TeamName(Team), SquadId + 1);
+					break;
+				}
+				const FIntPoint Cell = Free[NextFree++];
+				FVector Location = Grid->CellToWorld(Cell);
+				Location.Z = Source->GetActorLocation().Z;
+				const FTransform Transform(Source->GetActorRotation(), Location);
+				ASoldier* Soldier = GetWorld()->SpawnActorDeferred<ASoldier>(Source->GetClass(), Transform, nullptr, nullptr,
+					ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+				if (!Soldier)
+				{
+					continue;
+				}
+				Soldier->Team = Team;
+				Soldier->SquadId = SquadId;
+				Soldier->SquadIndex = Source->SquadIndex;
+				Soldier->SoldierColor = Source->SoldierColor;
+				Soldier->Weapon = Source->Weapon;
+				Soldier->SoldierData = Source->SoldierData;
+				Soldier->VisualData = Source->VisualData;
+				Soldier->MoveSpeed = Source->MoveSpeed;
+				Soldier->TurnSpeed = Source->TurnSpeed;
+				Soldier->MoveMarkerColor = Source->MoveMarkerColor;
+				Soldier->FinishSpawning(Transform);
+			}
+		}
+		UE_LOG(LogSquadMatch, Log, TEXT("squad.SquadsPerTeam: the %s now have %d squad(s)."), TeamName(Team), GetSquadIds(Team).Num());
 	}
 }
 
@@ -136,22 +365,12 @@ void ASquadGameMode::GiveTestMachineGuns()
 	{
 		return;
 	}
-	TSet<ESquadTeam> CommandedTeams;
-	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
-	{
-		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()))
-		{
-			if (!TeamsGivenTestMG.Contains(PC->PlayerTeam))
-			{
-				CommandedTeams.Add(PC->PlayerTeam);
-			}
-		}
-	}
-	TeamsGivenTestMG.Append(CommandedTeams);
+	TSet<int32> NewSquads = GetCommandedSquads().Difference(SquadsGivenTestMG);
+	SquadsGivenTestMG.Append(NewSquads);
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
 	{
 		ASoldier* Soldier = *It;
-		if (Soldier->GetSquadNumber() != TestMachineGunSoldier || !CommandedTeams.Contains(Soldier->Team) || Soldier->IsDead())
+		if (Soldier->GetSquadNumber() != TestMachineGunSoldier || !NewSquads.Contains(SquadKey(Soldier->Team, Soldier->SquadId)) || Soldier->IsDead())
 		{
 			continue;
 		}
@@ -182,7 +401,7 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 
 	// A dedicated server waits for players before the bots start fighting; a local game starts at once (its
 	// players have logged in before the first tick).
-	if (!bMatchStarted && (GetNetMode() != NM_DedicatedServer || GetNumPlayers() >= FMath::Max(1, CVarMinPlayers.GetValueOnGameThread())))
+	if (!bMatchStarted && (GetNetMode() != NM_DedicatedServer || GetNumPlayers() >= FMath::Max(0, CVarMinPlayers.GetValueOnGameThread())))
 	{
 		StartMatch();
 	}
@@ -199,33 +418,24 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 
 void ASquadGameMode::SpawnBots(const AController* Except)
 {
-	TSet<ESquadTeam> SquadTeams;
-	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	const TSet<int32> Commanded = GetCommandedSquads(Except);
+	for (const ESquadTeam Team : GetSquadTeams())
+	for (const int32 SquadId : GetSquadIds(Team))
 	{
-		SquadTeams.Add(It->Team);
-	}
-	TSet<ESquadTeam> CommandedTeams;
-	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
-	{
-		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()); PC && PC != Except)
-		{
-			CommandedTeams.Add(PC->PlayerTeam);
-		}
-	}
-	for (ESquadTeam Team : SquadTeams)
-	{
-		if (CommandedTeams.Contains(Team) || ASquadBot::FindForTeam(this, Team))
+		if (Commanded.Contains(SquadKey(Team, SquadId)) || ASquadBot::FindForSquad(this, Team, SquadId))
 		{
 			continue;
 		}
 		FActorSpawnParameters Params;
-		Params.Name = MakeUniqueObjectName(GetWorld()->GetCurrentLevel(), ASquadBot::StaticClass(), *FString::Printf(TEXT("SquadBot_%s"), TeamName(Team)));
+		Params.Name = MakeUniqueObjectName(GetWorld()->GetCurrentLevel(), ASquadBot::StaticClass(),
+			*FString::Printf(TEXT("SquadBot_%s_%d"), TeamName(Team), SquadId + 1));
 		Params.bDeferConstruction = true;
 		if (ASquadBot* Bot = GetWorld()->SpawnActor<ASquadBot>(ASquadBot::StaticClass(), FTransform::Identity, Params))
 		{
 			Bot->Team = Team;
+			Bot->SquadId = SquadId;
 			Bot->FinishSpawning(FTransform::Identity);
-			UE_LOG(LogSquadMatch, Log, TEXT("No player commands the %s squad: an AI bot takes over."), TeamName(Team));
+			UE_LOG(LogSquadMatch, Log, TEXT("No player commands the %s squad %d: an AI bot takes over."), TeamName(Team), SquadId + 1);
 
 			// squad.Bot lasts for the whole editor session, so a test script that turned it off would
 			// otherwise leave every later play test with a squad that silently never moves.
@@ -376,6 +586,11 @@ void ASquadGameMode::EndMatch(ESquadTeam Winner, EVictoryReason Reason)
 	{
 		UE_LOG(LogSquadMatch, Log, TEXT("MATCH OVER: %s win by %s."), TeamName(Winner),
 			Reason == EVictoryReason::Annihilation ? TEXT("annihilation") : TEXT("holding every Victory Point"));
+	}
+	if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+	{
+		Stats->OnMatchEnded(Winner, Reason == EVictoryReason::Draw ? TEXT("draw")
+			: Reason == EVictoryReason::Annihilation ? TEXT("annihilation") : TEXT("victory_points"));
 	}
 	// TODO (GDD §14.4): report the result to the post-match ELO endpoint once the backend exists.
 	if (bPauseOnMatchEnd)

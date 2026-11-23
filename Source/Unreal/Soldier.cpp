@@ -8,6 +8,7 @@
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
 #include "SquadGameState.h"
+#include "SquadMatchStats.h"
 #include "SquadPlayerController.h"
 #include "SquadPlayerState.h"
 #include "WeaponData.h"
@@ -362,6 +363,13 @@ void ASoldier::OnConstruction(const FTransform& Transform)
 void ASoldier::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// A soldier the server spawned during play (squad.SquadsPerTeam) was constructed here before its team,
+	// number, colour and data assets arrived; they have now, so build its look again.
+	if (GetNetMode() == NM_Client && !IsNetStartupActor())
+	{
+		OnConstruction(GetActorTransform());
+	}
 
 	// GDD §4.2 loadout: one rifle (loaded from the 70 rounds), grenades and a medkit.
 	const USoldierData* D = GetSoldierData();
@@ -919,6 +927,10 @@ void ASoldier::UpdateGrenadeThrow(float DeltaSeconds)
 		Grenade->SetBodyMesh(VisualData->GetGrenadeMesh(Team));
 	}
 	++GrenadesReleased;
+	if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+	{
+		Stats->RecordGrenadeThrown(*this, CurrentCell, PendingGrenadeCell);
+	}
 
 	--Inventory.Grenades;
 	GrenadeCooldown = D->GrenadeThrowCooldown;
@@ -1007,6 +1019,10 @@ void ASoldier::Die(const FKillCause& Cause)
 			Entry.WeaponName = Cause.Method == EKillMethod::Rifle ? SquadLoot::WeaponName(Cause.Weapon) : FString();
 			Entry.ChancePercent = Cause.ChancePercent;
 			GameState->AddKill(Entry);
+		}
+		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+		{
+			Stats->RecordDeath(*this, Cause);
 		}
 	}
 	StopDragging(); // A dead dragger lets go; a dead soldier being dragged keeps being dragged.
@@ -1350,6 +1366,14 @@ void ASoldier::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetime
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ASoldier, NetState);
+	// Identity: set once (in the level, or by the game mode before a spawned soldier begins play).
+	DOREPLIFETIME_CONDITION(ASoldier, Team, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SquadId, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SquadIndex, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SoldierColor, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, Weapon, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SoldierData, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, VisualData, COND_InitialOnly);
 }
 
 void ASoldier::WriteNetState()
@@ -2324,6 +2348,10 @@ void ASoldier::UpdateMedkit(float DeltaSeconds)
 	if (MedkitRemaining <= 0.f)
 	{
 		--Inventory.Medkits; // GDD §5.2: used up once applied.
+		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+		{
+			Stats->RecordMedkit(*this, *Patient);
+		}
 		CancelMedkit();
 		Patient->RecoverFromInjury();
 		ShowMessage(FString::Printf(TEXT("TREATED %d"), Patient->GetSquadNumber()));
@@ -2842,6 +2870,11 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Target->Team == ESquadTeam::Allies ? TEXT("Allied") : TEXT("Axis"), Target->GetSquadNumber(),
 		DistanceMetres, *Chance.Describe(), Roll / 1000.f, bHit ? TEXT("HIT") : TEXT("miss"));
 	UE_LOG(LogTemp, Log, TEXT("%s"), *ShotLog);
+	USquadMatchStats* Stats = USquadMatchStats::Get(this);
+	if (Stats)
+	{
+		Stats->RecordShot(*this, *Target, Chance, Roll / 1000.f, bHit);
+	}
 #if !UE_BUILD_SHIPPING
 	if (GEngine)
 	{
@@ -2885,7 +2918,14 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Cause.Method = EKillMethod::Rifle;
 		Cause.Weapon = GetWeaponData();
 		Cause.ChancePercent = Chance.FinalChance;
+		const bool bWasDead = Target->IsDead();
+		const bool bWasInjured = Target->IsInjured();
 		Target->ReceiveHit(DistanceMetres, Cause);
+		if (Stats)
+		{
+			Stats->RecordHitOutcome(bWasDead ? TEXT("none") : Target->IsDead() ? TEXT("killed")
+				: (Target->IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none"));
+		}
 	}
 }
 

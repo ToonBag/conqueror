@@ -97,7 +97,7 @@ ASquadBot::ASquadBot()
 	bReplicates = false; // Server-only brain; it acts through the soldiers' own (server-side) orders.
 }
 
-ASquadBot* ASquadBot::FindForTeam(const UObject* WorldContextObject, ESquadTeam InTeam)
+ASquadBot* ASquadBot::FindForSquad(const UObject* WorldContextObject, ESquadTeam InTeam, int32 InSquadId)
 {
 	const UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
 	if (!World)
@@ -106,7 +106,7 @@ ASquadBot* ASquadBot::FindForTeam(const UObject* WorldContextObject, ESquadTeam 
 	}
 	for (TActorIterator<ASquadBot> It(World); It; ++It)
 	{
-		if (It->Team == InTeam)
+		if (It->Team == InTeam && It->SquadId == InSquadId)
 		{
 			return *It;
 		}
@@ -167,6 +167,10 @@ void ASquadBot::GatherSquad()
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
 	{
 		ASoldier* S = *It;
+		if (S->Team == Team && S->SquadId != SquadId)
+		{
+			continue; // Another friendly squad: its own bot or player commands it.
+		}
 		if (S->Team != Team)
 		{
 			const FEnemyMemory* Existing = OldMemory.FindByPredicate([S](const FEnemyMemory& M) { return M.Soldier.Get() == S; });
@@ -525,7 +529,8 @@ void ASquadBot::AssignVictoryPoints()
 		FVPInfo& Info = VPs.AddDefaulted_GetRef();
 		Info.VP = VP;
 		Info.Centre = VP->GetMinCell() + FIntPoint(VP->SizeX / 2, VP->SizeY / 2);
-		Info.Distance = FVector2D::Distance(Centroid, FVector2D(Info.Centre));
+		Info.Distance = FVector2D::Distance(Centroid, FVector2D(Info.Centre))
+			+ FriendlySquadSpreadPenalty * CountOtherSquadsAssigned(VP); // Spread the team's squads out.
 		Info.bOwned = VP->IsOwnedBy(Team);
 		// VP ownership and contest state are shown on every player's screen.
 		if (VP->IsOwned() && !Info.bOwned)
@@ -921,7 +926,7 @@ bool ASquadBot::TryThrowGrenade(FSoldierBrain& Brain)
 			continue; // Out of reach, or close enough to stun the thrower.
 		}
 		const FVector Landing = Grid->CellToWorld(Cell);
-		if (IsSquadMateNear(Landing, StunRadius + FriendlySafetyMargin))
+		if (IsFriendlyNear(Landing, StunRadius + FriendlySafetyMargin))
 		{
 			continue;
 		}
@@ -1176,7 +1181,51 @@ bool ASquadBot::IsSlotTaken(FIntPoint Cell, const ASoldier* Except) const
 			return true;
 		}
 	}
+	// Other friendly squads: a cell one of their soldiers stands on, is heading for or has been given.
+	for (TActorIterator<ASquadBot> It(GetWorld()); It; ++It)
+	{
+		if (*It == this || It->Team != Team)
+		{
+			continue;
+		}
+		for (const FSoldierBrain& Brain : It->Brains)
+		{
+			if (Brain.bHasSlot && Brain.Slot == Cell && Brain.Soldier.IsValid() && !Brain.Soldier->IsDead())
+			{
+				return true;
+			}
+		}
+	}
+	for (const TWeakObjectPtr<ASoldier>& Weak : Grid->GetSoldiers())
+	{
+		const ASoldier* S = Weak.Get();
+		if (S && S != Except && S->Team == Team && S->SquadId != SquadId && !S->IsDead()
+			&& (S->GetCurrentCell() == Cell || S->GetDestinationCell() == Cell))
+		{
+			return true;
+		}
+	}
 	return false;
+}
+
+int32 ASquadBot::CountOtherSquadsAssigned(const AVictoryPoint* VP) const
+{
+	int32 Count = 0;
+	for (TActorIterator<ASquadBot> It(GetWorld()); It; ++It)
+	{
+		if (*It == this || It->Team != Team)
+		{
+			continue;
+		}
+		for (const FSoldierBrain& Brain : It->Brains)
+		{
+			if (Brain.AssignedVP.Get() == VP && Brain.Soldier.IsValid() && !Brain.Soldier->IsDead())
+			{
+				++Count;
+			}
+		}
+	}
+	return Count;
 }
 
 int32 ASquadBot::CountKnownEnemiesNear(FVector Location, float RadiusMetres) const
@@ -1194,12 +1243,13 @@ int32 ASquadBot::CountKnownEnemiesNear(FVector Location, float RadiusMetres) con
 	return Count;
 }
 
-bool ASquadBot::IsSquadMateNear(FVector Location, float RadiusMetres) const
+bool ASquadBot::IsFriendlyNear(FVector Location, float RadiusMetres) const
 {
-	for (const FSoldierBrain& Brain : Brains)
+	// Every friendly squad, not just this one: a grenade doesn't care whose squad it lands among.
+	for (const TWeakObjectPtr<ASoldier>& Weak : Grid->GetSoldiers())
 	{
-		const ASoldier* Mate = Brain.Soldier.Get();
-		if (!Mate || Mate->IsDead())
+		const ASoldier* Mate = Weak.Get();
+		if (!Mate || Mate->Team != Team || Mate->IsDead())
 		{
 			continue;
 		}

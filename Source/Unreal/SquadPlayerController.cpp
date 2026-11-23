@@ -45,7 +45,7 @@ void ASquadPlayerController::GatherSquad()
 	Squad.Reset();
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
 	{
-		if (It->Team == PlayerTeam)
+		if (IsOwnSquad(*It))
 		{
 			Squad.Add(*It);
 			if (HasAuthority())
@@ -71,7 +71,7 @@ void ASquadPlayerController::SetSelection(const TArray<ASoldier*>& NewSelection)
 	Selected.Reset();
 	for (ASoldier* Soldier : NewSelection)
 	{
-		if (Soldier && !Soldier->IsDead() && Soldier->Team == PlayerTeam)
+		if (Soldier && !Soldier->IsDead() && IsOwnSquad(Soldier))
 		{
 			Selected.AddUnique(Soldier);
 			Soldier->SetSelected(true);
@@ -354,7 +354,7 @@ void ASquadPlayerController::RequestLootAction(const FLootAction& Action)
 
 void ASquadPlayerController::ServerLootAction_Implementation(ASoldier* Looter, const FLootAction& Action)
 {
-	if (Looter && Looter->Team == PlayerTeam && !Looter->IsDead())
+	if (IsOwnSquad(Looter) && !Looter->IsDead())
 	{
 		SquadLoot::Execute(Looter, Action); // Checks reach and what the source holds itself.
 		Looter->ForceNetUpdate();
@@ -369,7 +369,7 @@ void ASquadPlayerController::ServerSoldierOrder_Implementation(const FSoldierOrd
 	}
 	// Only this player's own living soldiers take orders from it (GDD §4.1: one squad per player).
 	ASoldier* Soldier = Order.Soldier.Get();
-	if (!Soldier || Soldier->Team != PlayerTeam || Soldier->IsDead()
+	if (!IsOwnSquad(Soldier) || Soldier->IsDead()
 		|| (Soldier->GetOwningPlayer() && Soldier->GetOwningPlayer() != PlayerState))
 	{
 		return;
@@ -381,12 +381,14 @@ void ASquadPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ASquadPlayerController, PlayerTeam);
+	DOREPLIFETIME(ASquadPlayerController, PlayerSquadId);
 }
 
-void ASquadPlayerController::AssignTeam(ESquadTeam Team)
+void ASquadPlayerController::AssignTeam(ESquadTeam Team, int32 SquadId)
 {
 	check(HasAuthority());
 	PlayerTeam = Team;
+	PlayerSquadId = SquadId;
 	if (ASquadPlayerState* PS = GetPlayerState<ASquadPlayerState>())
 	{
 		PS->Team = Team;

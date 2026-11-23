@@ -203,28 +203,36 @@ public:
 	// ---------------------------------------------------------------- Identity / tuning
 
 	/** Order within the squad (0-3). The soldier is labelled SquadIndex+1 and number key SquadIndex+1 selects it. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0", ClampMax = "3"))
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0", ClampMax = "3"))
 	int32 SquadIndex = 0;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	ESquadTeam Team = ESquadTeam::Allies;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	/**
+	 * Which of its team's squads this soldier belongs to (0 = the squad placed in the level). A team holds one
+	 * squad per player (GDD §4.1); the game mode spawns squads beyond the first (squad.SquadsPerTeam). Team,
+	 * squad, number, colour and data assets replicate once, so soldiers spawned during play are right on clients.
+	 */
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0"))
+	int32 SquadId = 0;
+
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	FLinearColor SoldierColor = FLinearColor(0.2f, 0.4f, 0.9f);
 
 	/**
 	 * Starting rifle. Falls back to UWeaponData class defaults (M1 Garand) if unset. During play the rifle
 	 * actually held lives in the inventory and can change by looting (GDD §5.5); use GetWeaponData().
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<UWeaponData> Weapon;
 
 	/** Loadout, stance speeds, damage and grenade tuning. Falls back to class defaults if unset. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<USoldierData> SoldierData;
 
 	/** Uniformed models, held rifle / grenade attachment and animation clips. Without it the soldier is a bean. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<USoldierVisualData> VisualData;
 
 	/** Colour of the flashing square on the cell this soldier has been ordered to. */
@@ -358,8 +366,11 @@ public:
 
 	// ---------------------------------------------------------------- Squad cohesion (GDD §4.3, server only)
 
-	/** Same squad. One squad per team for now; this becomes the owning player's squad once teams hold several. */
-	bool IsSquadMate(const ASoldier* Other) const { return Other && Other != this && Other->Team == Team; }
+	/** Same squad: same team and squad (GDD §4.3 holds each squad together, not the whole team). */
+	bool IsSquadMate(const ASoldier* Other) const { return Other && Other != this && Other->Team == Team && Other->SquadId == SquadId; }
+
+	/** Server: reseeds this soldier's hit-roll stream (reproducible test matches, squad.MatchSeed). */
+	void SeedRandom(int32 Seed) { Rng.Initialize(Seed); }
 
 	/** Where this soldier counts for the cohesion limit: the cell it is heading to (its dragger's, while dragged). */
 	FIntPoint GetCohesionCell(const TMap<const ASoldier*, FIntPoint>* GroupPlan = nullptr) const;

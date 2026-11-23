@@ -8,6 +8,7 @@
   ./Scripts/LocalMultiplayer.ps1                       # server + 2 clients on Farmstead
   ./Scripts/LocalMultiplayer.ps1 -Clients 1 -Lag       # one client, with emulated lag / loss
   ./Scripts/LocalMultiplayer.ps1 -ServerOnly           # just the server (join with -game 127.0.0.1:17777)
+  ./Scripts/LocalMultiplayer.ps1 -ServerArgs "-ini:Engine:[ConsoleVariables]:squad.SquadsPerTeam=4"   # 4v4
   ./Scripts/LocalMultiplayer.ps1 -Stop                 # close every process this script started
 
   Logs: Saved/Logs/LocalMP_Server.log, LocalMP_Client1.log, ...
@@ -19,6 +20,7 @@ param(
     [switch]$Lag,          # ~45 ms each way, 1% loss on the clients (PktLag / PktLoss)
     [switch]$ServerOnly,
     [switch]$Stop,
+    [string[]]$ServerArgs = @(),   # extra server arguments, e.g. "-ini:Engine:[ConsoleVariables]:squad.SquadsPerTeam=4"
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -43,7 +45,7 @@ New-Item -ItemType Directory -Force (Split-Path $PidFile) | Out-Null
 $started = @()
 
 $server = Start-Process $Editor -PassThru -ArgumentList (@("`"$Project`"", "$Map", "-server", "-port=$Port", "-log", "-unattended", "-nosplash",
-    "-abslog=`"$(Join-Path $PSScriptRoot '..\Saved\Logs\LocalMP_Server.log')`"") )
+    "-abslog=`"$(Join-Path $PSScriptRoot '..\Saved\Logs\LocalMP_Server.log')`"") + $ServerArgs)
 $started += $server.Id
 "Server  pid $($server.Id)  port $Port  map $Map"
 
