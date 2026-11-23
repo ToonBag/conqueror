@@ -74,6 +74,26 @@ struct FHitChanceInfo
 };
 
 /**
+ * One resolved rifle or machine-gun round, reported on the server for demos and tests (ASoldier::OnShotResolved).
+ * Roll model: Outcome is "hit" or "miss". Projectile model (GDD §16): "injured" / "killed" / "none" when it hit the
+ * soldier aimed at, else "miss_cover", "miss_ground", "miss_lost", "stray_enemy" or "friendly".
+ */
+struct FSoldierShotReport
+{
+	const ASoldier* Shooter = nullptr;
+	const ASoldier* Target = nullptr;
+	/** Soldier the round actually hit (null on a miss). */
+	const ASoldier* Victim = nullptr;
+	bool bHitTarget = false;
+	FHitChanceInfo Chance;
+	/** Body part hit (projectile model only). */
+	EHitPart Part = EHitPart::Chest;
+	FString Outcome;
+};
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnSoldierShotResolved, const FSoldierShotReport&);
+
+/**
  * Everything a client needs to show a soldier: the server copies its live fields in here every tick
  * (ASoldier::WriteNetState), and clients copy them back into the same fields (ReadNetState), so the HUD and
  * animation code read one set of fields everywhere. Server-only state (RNG, scan timers, AI choices) stays out.
@@ -321,6 +341,9 @@ public:
 
 	/** Stress gained from incoming fire and cross-fire since the last reset, before the 100 cap. */
 	float GetStressReceivedTotal() const { return StressReceivedTotal; }
+
+	/** Server: every resolved rifle / MG round of every soldier (debug, demos, tests; nothing in the game binds it). */
+	static FOnSoldierShotResolved OnShotResolved;
 
 	/** Debug: zeroes the counters above. */
 	void DebugResetCombatStats() { HitsLanded = 0; RoundsFiredStat = 0; StressReceivedTotal = 0.f; }

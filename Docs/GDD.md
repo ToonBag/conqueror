@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.51 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.52 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.52, `ballistics-prototype` branch only):** Combat-model comparison tooling (§11.2, §16.7; no gameplay change). New firing-range demo `squad.DemoCombat` (headless via `Scripts/CombatModeDemo.ps1`) runs identical lanes under both rule sets: hit rate by target set-up (open standing / crouched / prone, braced or prone behind hay, low wall, window) and range 4-40 m, and full engagements (rounds and seconds to injure and to finish off). AI-match shot records gain `shooter_braced`, `target_injured`, `exposure_pct` and `hit_part`. `Scripts/Tests/compare_combat_modes.py` builds the comparison; first results in `Docs/Balancing/2026-11-23_combat_modes/`.
 
 > **Changelog (v0.51, `ballistics-prototype` branch only):** Experimental projectile combat (§16, new), off by default behind `squad.Ballistics 1`. Every rifle round is a server-simulated projectile that leaves the muzzle with a random angular spread and stops on the ground, on cover or on a soldier's body parts, so cover protects by physically hiding the body and the angle of fire matters. Soldiers brace on low cover (crouched, rifle on top, head showing) and duck while reloading. Friendly rounds injure but never kill. Rounds passing close stress soldiers. The hit-chance roll (§5.3) and flat cover reductions (§9.1) are unchanged and still used with the switch off. AI test matches take `-Ballistics` (§11.2).
 
@@ -609,6 +611,8 @@ Bot-only matches on a dedicated server with no clients, recorded for balancing. 
 - `squad.MatchTimeLimit <s>` ends the record as a timeout; `squad.QuitAfterMatch 1` closes the server after writing it.
 - `squad.SwapSides 1` — each faction starts in the other's deployment zone with its own rifles (tells a map-side bias from a faction bias).
 - `squad.Ballistics 1` (`AIMatchBatch.ps1 -Ballistics`) — experimental projectile combat (§16). Shot rows then carry the estimated chance, a roll of -1 and where the round went; the JSON adds friendly-fire, stray-hit, rounds-stopped-by-cover and hit-part counts per team.
+- Shot rows also record whether the shooter was braced, whether the target was already injured when the round arrived (so a kill can be told apart as outright, within 5 m, or finishing off), and in the projectile model the target's exposure and the body part hit.
+- **Firing-range comparison** (`squad.DemoCombat [hitrate|engage|all] [rounds] [reps] [quit]`, `Scripts/CombatModeDemo.ps1`): Allied soldier 1 fires at Axis soldier 1 on lanes found on the map, each trial run with `squad.Ballistics` 0 and then 1 on the same geometry, stress held at 0. Hit-rate trials keep the target invulnerable in a fixed stance; engagements play out injury (the target drops prone where it is) and the finishing shot. `Scripts/Tests/compare_combat_modes.py` combines these with AI match records of both rule sets.
 
 The bots decide these matches, so the numbers show how the rules play under bot tactics, not under skilled players.
 
@@ -841,3 +845,13 @@ _Prototype on the `ballistics-prototype` branch, off by default. With the server
 - Spread values per weapon (machine guns currently use the rifle value).
 - Injured-only stalemates (§11.2 review) happen more often: 6 of 20 test matches timed out, against 2 of 20 with hit-chance rolls on the same seeds. Prone soldiers behind cover are hard to hit.
 - Whether soldiers should stay braced while being shot at, or duck on their own under heavy fire.
+- A prone shooter about 4 m from a low wall or window still has line of sight to a soldier braced behind it, but nothing of that soldier is exposed to its muzzle (the estimate shows 0%) and every round hits the wall. Automatic targeting skips such a target; an explicit attack order fires anyway. Decide whether line of sight should account for muzzle height, or the attack order should refuse ("NO CLEAR SHOT").
+
+### 16.7 Comparison with hit-chance rolls (2026-11-23)
+
+Firing-range demo and 40 + 40 AI matches (§11.2), full review in `Docs/Balancing/2026-11-23_combat_modes/`. Findings, not rules:
+
+- The hit chance shown matches what happens in both models (within about 2 points at the firing range).
+- Projectile hit rates fall smoothly with range (standing target in the open, standing shooter: 100% at 4 m, 51% at 16 m, 11% at 40 m), where rolls are flat inside each band (about 65% from 8 to 20 m). Target and shooter stance matter only with projectiles: a prone target at 20 m is hit 16% of the time against 36% standing, and a prone shooter hits more.
+- Braced behind cover at 12-20 m, soldiers are hit about as often in both models (about 25% rolls, 18-33% projectiles). At 4 m cover does little against projectiles, and beyond 20 m a low wall still lets 5-7% of rounds hit the head, where rolls give 0%.
+- Out of cover a hit does the same in both models (about half injure, 10% kill at 5 m or less, 40% finish an injured soldier). A soldier injured while braced behind cover drops prone out of sight and can't be finished from the front in either model. That is the main source of injured-only stalemates, which rose from 6 to 11 of 40 matches with projectiles.

@@ -12,6 +12,14 @@ class AVictoryPoint;
 struct FHitChanceInfo;
 struct FKillCause;
 
+/** The target as it was when a round reached it, before the hit changed it (projectile rounds are recorded afterwards). */
+struct FShotTargetSnapshot
+{
+	ESoldierStance Stance = ESoldierStance::Standing;
+	bool bMoving = false;
+	bool bInjured = false;
+};
+
 /**
  * Server-only match recorder for balancing (AI test matches, squad.MatchStats 1). It records every rifle shot
  * (with its hit chance and roll), what each hit did, every grenade and C4 blast, medkit treatments, VP captures
@@ -41,7 +49,9 @@ public:
 	/** Writes the record. Reason: "annihilation", "victory_points", "draw" or "timeout". */
 	void OnMatchEnded(ESquadTeam Winner, const FString& Reason);
 
-	void RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit);
+	/** Call before the hit is applied, or pass TargetBefore. HitPart: projectile model only. */
+	void RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit, const TCHAR* HitPart = TEXT(""),
+		const FShotTargetSnapshot* TargetBefore = nullptr);
 	/** After a rifle hit: Outcome "injured", "killed" or "none" (invulnerable / already dead). */
 	void RecordHitOutcome(const FString& Outcome);
 	/**
@@ -50,7 +60,7 @@ public:
 	 * "miss_ground", "miss_lost", "stray_enemy", "friendly").
 	 */
 	void RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
-		EHitPart Part, const FString& Outcome);
+		EHitPart Part, const FString& Outcome, const FShotTargetSnapshot& TargetBefore);
 	/** Projectile model: a round hit a soldier it was not aimed at. Effect: "injured", "killed" or "none". */
 	void RecordStrayHit(const ASoldier& Shooter, const ASoldier& Victim, bool bFriendly, float DistanceMetres, const FString& Effect);
 	void RecordGrenadeThrown(const ASoldier& Thrower, FIntPoint From, FIntPoint Target);

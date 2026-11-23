@@ -968,6 +968,8 @@ ESoldierStance ASoldier::GetNextStance() const
 
 // ------------------------------------------------------------------------------------------------ Damage
 
+FOnSoldierShotResolved ASoldier::OnShotResolved;
+
 void ASoldier::ReceiveHit(float DistanceMetres, const FKillCause& Cause)
 {
 	if (bDead || IsDebugInvulnerable())
@@ -2956,6 +2958,17 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 			Stats->RecordHitOutcome(bWasDead ? TEXT("none") : Target->IsDead() ? TEXT("killed")
 				: (Target->IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none"));
 		}
+	}
+	if (OnShotResolved.IsBound())
+	{
+		FSoldierShotReport Report;
+		Report.Shooter = this;
+		Report.Target = Target;
+		Report.Victim = bHit ? Target : nullptr;
+		Report.bHitTarget = bHit;
+		Report.Chance = Chance;
+		Report.Outcome = bHit ? TEXT("hit") : TEXT("miss");
+		OnShotResolved.Broadcast(Report);
 	}
 }
 

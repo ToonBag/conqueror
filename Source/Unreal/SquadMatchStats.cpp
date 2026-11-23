@@ -134,7 +134,7 @@ void USquadMatchStats::OnMatchStarted(int32 Seed, int32 SquadsPerTeam)
 	Soldiers.Reset();
 	ShotRows.Reset();
 	Events.Reset();
-	ShotRows.Add(TEXT("time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,hit,outcome"));
+	ShotRows.Add(TEXT("time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,shooter_braced,target_injured,exposure_pct,hit_part,hit,outcome"));
 	for (TActorIterator<ASoldier> It(World); It; ++It)
 	{
 		Find(**It);
@@ -170,20 +170,27 @@ void USquadMatchStats::Tick(float DeltaTime)
 	}
 }
 
-void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit)
+void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit, const TCHAR* HitPart,
+	const FShotTargetSnapshot* TargetBefore)
 {
+	FShotTargetSnapshot Now;
+	Now.Stance = Target.GetEffectiveStance();
+	Now.bMoving = Target.IsMoving();
+	Now.bInjured = Target.IsInjured();
+	const FShotTargetSnapshot& T = TargetBefore ? *TargetBefore : Now;
 	if (bWritten)
 	{
 		return;
 	}
 	const UEnum* CoverEnum = StaticEnum<ECoverType>();
-	ShotRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%s,%s,%.1f,%s,%s,%d,%.2f,%.3f,%.3f,%s,%.1f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,"),
+	ShotRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%s,%s,%.1f,%s,%s,%d,%.2f,%.3f,%.3f,%s,%.1f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.1f,%s,%d,"),
 		MatchTime(), *SoldierId(Shooter), TeamName(Shooter.Team), *WeaponName(Shooter), StanceName(Shooter.GetEffectiveStance()),
-		Shooter.GetStress(), *SoldierId(Target), StanceName(Target.GetEffectiveStance()), Target.IsMoving() ? 1 : 0,
+		Shooter.GetStress(), *SoldierId(Target), StanceName(T.Stance), T.bMoving ? 1 : 0,
 		Chance.DistanceMetres, Chance.BaseChance, Chance.StressAccuracyMultiplier,
 		CoverEnum ? *CoverEnum->GetNameStringByValue(static_cast<int64>(Chance.Cover)) : TEXT("?"),
 		Chance.CoverReduction, Chance.bCoverLeaning ? 1 : 0, Chance.FinalChance, Roll,
-		Shooter.GetCurrentCell().X, Shooter.GetCurrentCell().Y, Target.GetCurrentCell().X, Target.GetCurrentCell().Y, bHit ? 1 : 0));
+		Shooter.GetCurrentCell().X, Shooter.GetCurrentCell().Y, Target.GetCurrentCell().X, Target.GetCurrentCell().Y,
+		Chance.bBraced ? 1 : 0, T.bInjured ? 1 : 0, Chance.bBallistic ? Chance.ExposurePercent : -1.f, HitPart, bHit ? 1 : 0));
 	PendingOutcomeRow = bHit ? ShotRows.Num() - 1 : INDEX_NONE;
 	if (bHit)
 	{
@@ -192,14 +199,14 @@ void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Targe
 }
 
 void USquadMatchStats::RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
-	EHitPart Part, const FString& Outcome)
+	EHitPart Part, const FString& Outcome, const FShotTargetSnapshot& TargetBefore)
 {
 	if (bWritten)
 	{
 		return;
 	}
 	bBallisticsMatch = true;
-	RecordShot(Shooter, Target, Chance, -1.f, bHitTarget);
+	RecordShot(Shooter, Target, Chance, -1.f, bHitTarget, bHitTarget ? GetHitPartName(Part) : TEXT(""), &TargetBefore);
 	ShotRows.Last() += Outcome;
 	PendingOutcomeRow = INDEX_NONE;
 	const int32 T = TeamIdx(Shooter.Team);

@@ -416,6 +416,13 @@ void ASoldier::OnBallisticRoundResolved(const FBallisticRound& Round, const FBal
 {
 	ASoldier* Target = Round.Target.Get();
 	ASoldier* Victim = Hit.Kind == EBallisticHit::Soldier ? Hit.Soldier : nullptr;
+	FShotTargetSnapshot TargetBefore; // for the match record, which is written after the hit is applied
+	if (Target)
+	{
+		TargetBefore.Stance = Target->GetEffectiveStance();
+		TargetBefore.bMoving = Target->IsMoving();
+		TargetBefore.bInjured = Target->IsInjured();
+	}
 	MulticastShot(Round.Muzzle, Hit.Point, Victim != nullptr); // Tracer and gunshot on every machine.
 
 	USquadMatchStats* Stats = USquadMatchStats::Get(this);
@@ -475,7 +482,7 @@ void ASoldier::OnBallisticRoundResolved(const FBallisticRound& Round, const FBal
 	{
 		if (Stats)
 		{
-			Stats->RecordBallisticShot(*this, *Target, Round.Chance, bHitTarget, Hit.Part, Outcome);
+			Stats->RecordBallisticShot(*this, *Target, Round.Chance, bHitTarget, Hit.Part, Outcome, TargetBefore);
 		}
 		const FString ShotLog = FString::Printf(TEXT("%s %d -> %s %d: %s, round -> %s%s%s"),
 			Team == ESquadTeam::Allies ? TEXT("Allied") : TEXT("Axis"), GetSquadNumber(),
@@ -488,6 +495,18 @@ void ASoldier::OnBallisticRoundResolved(const FBallisticRound& Round, const FBal
 			GEngine->AddOnScreenDebugMessage(-1, 6.f, Victim ? FColor(255, 120, 80) : FColor(200, 200, 200), ShotLog);
 		}
 #endif
+	}
+	if (OnShotResolved.IsBound())
+	{
+		FSoldierShotReport Report;
+		Report.Shooter = this;
+		Report.Target = Target;
+		Report.Victim = Victim;
+		Report.bHitTarget = bHitTarget;
+		Report.Chance = Round.Chance;
+		Report.Part = Hit.Part;
+		Report.Outcome = Outcome;
+		OnShotResolved.Broadcast(Report);
 	}
 }
 
