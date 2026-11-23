@@ -31,6 +31,7 @@ namespace
 		UInstancedStaticMeshComponent* Set = Owner->CreateDefaultSubobject<UInstancedStaticMeshComponent>(Name);
 		Set->SetupAttachment(Parent);
 		Set->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Set->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Set->SetCanEverAffectNavigation(false);
 		Set->SetMobility(EComponentMobility::Movable);
 		return Set;
@@ -73,6 +74,7 @@ void ACoverActor::OnConstruction(const FTransform& Transform)
 		Set->ClearInstances();
 		Set->SetStaticMesh(nullptr);
 		Set->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Set->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 	}
 
 	TArray<FCoverCellSpec> Cells;
@@ -257,6 +259,7 @@ UInstancedStaticMeshComponent* ACoverActor::GetMeshSet(UStaticMesh* Mesh, FName 
 	else
 	{
 		Set->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Set->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 	}
 	Set->RegisterComponent();
 	MeshSets.Add(Set);

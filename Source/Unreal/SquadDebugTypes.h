@@ -37,6 +37,8 @@ enum class ESquadDebugAction : uint8
 	// Every enemy of the requesting player's team.
 	InjureEnemies,
 	KillEnemies,
+	/** Restart the match on the same map (server travel, so every client follows). */
+	Restart,
 	/** Param = stress 0-100. */
 	StressEnemies
 };

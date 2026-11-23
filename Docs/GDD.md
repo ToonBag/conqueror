@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.46 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.47 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.47):** Networked play (§11.1, §14.1; implementation, no rule changes). Soldiers, grenades and loot piles are now simulated only on the dedicated server and replicated to every client; every order a player gives (move, stop, face, attack, stance, hold fire, grenade, drag, medkit, loot) is sent to the server, which checks the soldier is that player's before running it. Until matchmaking assigns teams (§12, §14.2), each player who joins goes to the team with fewer players (Allies on a tie). A dedicated server waits for its first player before the match starts and bots take empty teams (`squad.MinPlayers`, default 1); a player joining a bot-run team takes that squad over, and a team every player has left goes back to a bot. Development and tests now run as a dedicated server with networked clients. The debug menu's Restart (§13) restarts the match on the server, so every client restarts with it.
 
 > **Changelog (v0.46):** Cover props (§9.5, _provisional_). Wells, water troughs, crate stacks, barrels, woodpiles, sandbags, hay carts and abandoned vehicles can be placed as cover. Each uses an existing cover type: a truck or tank wreck is full cover that blocks sight like a wall, a car and the small props are low walls, a hay cart is hay. Multi-cell props are solid blocks, so grenades can't drop between their cells.
 
@@ -569,6 +571,8 @@ All three VPs lie on the map's centre line, so each is the same distance from bo
 
 For testing without a second player, a squad no player commands is given to a server-side AI bot (`ASquadBot`). It gives its soldiers only orders a player could give (move, stop, face, grenade), so it follows every rule (own line of sight to shoot, grenade arcs, stress, reloads, wind-ups). Its soldiers fire on their own (§5.3) exactly like the player's.
 
+In a networked game (§14.1) the bots start once the first player has joined. A player who joins a team a bot is running takes the squad over at once, and a team every player has left goes back to a bot.
+
 **Plays like a person, not a script:**
 - **Simulated camera.** The bot sees through a camera with the same angle, field of view and zoom limits as the player's (it plays at a fairly wide zoom). It looks at one area at a time, pans at the player's pan speed, and moves its attention between its soldiers every few seconds (fighting soldiers first). A soldier coming under fire or getting hit off screen draws the camera there after a short delay, as a flashing squad card would.
 - **Noticing enemies.** An enemy is noticed only when the bot's team spots it (§9.3), it is on the bot's screen, and no wall or tree hides it from the camera. Noticing takes a reaction delay (about 0.5–1 s) plus extra time for a prone enemy, an enemy in cover, or one near the edge of the screen. The bot remembers noticed enemies at their last seen cell for about 10 s after losing them.
@@ -742,6 +746,8 @@ Because the game relies on deterministic grid movement, true RNG shot calculatio
 
 - The game runs strictly on headless **Unreal Engine dedicated servers** (a `Server` build target, Linux, built from the engine source). The server is the ultimate authority for line of sight, stress, and hit-chance RNG; clients only send orders (Server RPCs) and render replicated state.
 - **Google Kubernetes Engine (GKE):** Servers are containerised and deployed globally.
+- **Replication (implemented):** the server simulates every soldier and replicates what clients need to show it (position, stance, health, stress, ammo, timers, orders in progress); clients only animate and render. Orders and loot actions go to the server as RPCs and run only after it checks the soldier belongs to the sender. Grenades are launched on the server; clients fly a copy of the same arc, and only the server's blast does damage. Line of sight decides what each client draws (§9.3).
+- **Local testing:** development runs the same way on one PC: Play-in-Editor as a dedicated server with networked clients, or `Scripts/LocalMultiplayer.ps1` for separate server and client processes (see `CLAUDE.md`).
 - **Agones:** This open-source game server orchestrator (via its Unreal Engine SDK plugin) manages game server lifecycles, spinning up dedicated 5v5 or 10v10 instances exactly when matchmaking completes, and shutting them down when the match concludes.
 
 ### 14.2 Matchmaking (Open Match)

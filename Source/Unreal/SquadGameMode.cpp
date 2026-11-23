@@ -19,6 +19,11 @@ DEFINE_LOG_CATEGORY_STATIC(LogSquadMatch, Log, All);
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarMinPlayers(
+		TEXT("squad.MinPlayers"), 1,
+		TEXT("Dedicated server: players who must have joined before the match starts and bots take empty teams (default 1)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> CVarVPWinTime(
 		TEXT("squad.VPWinTime"), 0.f,
 		TEXT("Overrides the Victory Point win timer in seconds for testing (0: use the game mode's VPWinTime, 5 minutes)."),
@@ -41,6 +46,90 @@ ASquadGameMode::ASquadGameMode()
 	PlayerStateClass = ASquadPlayerState::StaticClass();
 }
 
+void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
+{
+	Super::PostLogin(NewPlayer);
+	ASquadPlayerController* PC = Cast<ASquadPlayerController>(NewPlayer);
+	if (!PC)
+	{
+		return;
+	}
+	// Fewest players first, Allies on a tie. (Matchmaking will set teams later; GDD §14.)
+	const TArray<ESquadTeam> Teams = GetSquadTeams();
+	ESquadTeam Team = ESquadTeam::Allies;
+	int32 Fewest = MAX_int32;
+	for (const ESquadTeam Candidate : Teams)
+	{
+		const int32 Count = CountPlayers(Candidate, PC);
+		if (Count < Fewest)
+		{
+			Fewest = Count;
+			Team = Candidate;
+		}
+	}
+	PC->AssignTeam(Team);
+	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"), TeamName(Team));
+
+	// A player joining a bot-run team takes the squad over.
+	if (ASquadBot* Bot = ASquadBot::FindForTeam(this, Team))
+	{
+		UE_LOG(LogSquadMatch, Log, TEXT("The %s AI bot hands its squad to the player."), TeamName(Team));
+		Bot->Destroy();
+	}
+	if (bMatchStarted)
+	{
+		GiveTestMachineGuns();
+	}
+}
+
+void ASquadGameMode::Logout(AController* Exiting)
+{
+	const ASquadPlayerController* PC = Cast<ASquadPlayerController>(Exiting);
+	Super::Logout(Exiting);
+	if (PC && bMatchStarted && !bMatchEnded && bSpawnBotsForUncommandedTeams && CountPlayers(PC->PlayerTeam, PC) == 0)
+	{
+		UE_LOG(LogSquadMatch, Log, TEXT("Every %s player has left."), TeamName(PC->PlayerTeam));
+		SpawnBots(PC);
+	}
+}
+
+void ASquadGameMode::StartMatch()
+{
+	bMatchStarted = true;
+	UE_LOG(LogSquadMatch, Log, TEXT("Match starts with %d player(s)."), GetNumPlayers());
+	SpawnTacticalPlans();
+	GiveTestMachineGuns();
+	if (bSpawnBotsForUncommandedTeams)
+	{
+		SpawnBots();
+	}
+}
+
+TArray<ESquadTeam> ASquadGameMode::GetSquadTeams() const
+{
+	TArray<ESquadTeam> Teams;
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		Teams.AddUnique(It->Team);
+	}
+	Teams.Sort([](ESquadTeam A, ESquadTeam B) { return static_cast<uint8>(A) < static_cast<uint8>(B); });
+	return Teams;
+}
+
+int32 ASquadGameMode::CountPlayers(ESquadTeam Team, const AController* Except) const
+{
+	int32 Count = 0;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get());
+		if (PC && PC != Except && PC->PlayerTeam == Team)
+		{
+			++Count;
+		}
+	}
+	return Count;
+}
+
 void ASquadGameMode::GiveTestMachineGuns()
 {
 	if (TestMachineGunSoldier <= 0)
@@ -52,13 +141,17 @@ void ASquadGameMode::GiveTestMachineGuns()
 	{
 		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()))
 		{
-			CommandedTeams.Add(PC->PlayerTeam);
+			if (!TeamsGivenTestMG.Contains(PC->PlayerTeam))
+			{
+				CommandedTeams.Add(PC->PlayerTeam);
+			}
 		}
 	}
+	TeamsGivenTestMG.Append(CommandedTeams);
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
 	{
 		ASoldier* Soldier = *It;
-		if (Soldier->GetSquadNumber() != TestMachineGunSoldier || !CommandedTeams.Contains(Soldier->Team))
+		if (Soldier->GetSquadNumber() != TestMachineGunSoldier || !CommandedTeams.Contains(Soldier->Team) || Soldier->IsDead())
 		{
 			continue;
 		}
@@ -87,16 +180,15 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// Spawn on the first tick, once every local player has logged in and picked a team.
-	if (!bBotsSpawned)
+	// A dedicated server waits for players before the bots start fighting; a local game starts at once (its
+	// players have logged in before the first tick).
+	if (!bMatchStarted && (GetNetMode() != NM_DedicatedServer || GetNumPlayers() >= FMath::Max(1, CVarMinPlayers.GetValueOnGameThread())))
 	{
-		bBotsSpawned = true;
-		SpawnTacticalPlans();
-		GiveTestMachineGuns();
-		if (bSpawnBotsForUncommandedTeams)
-		{
-			SpawnBots();
-		}
+		StartMatch();
+	}
+	if (!bMatchStarted)
+	{
+		return;
 	}
 	UpdateTacticalRoles();
 	if (!bMatchEnded)
@@ -105,7 +197,7 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 	}
 }
 
-void ASquadGameMode::SpawnBots()
+void ASquadGameMode::SpawnBots(const AController* Except)
 {
 	TSet<ESquadTeam> SquadTeams;
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
@@ -115,7 +207,7 @@ void ASquadGameMode::SpawnBots()
 	TSet<ESquadTeam> CommandedTeams;
 	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
 	{
-		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()))
+		if (const ASquadPlayerController* PC = Cast<ASquadPlayerController>(It->Get()); PC && PC != Except)
 		{
 			CommandedTeams.Add(PC->PlayerTeam);
 		}

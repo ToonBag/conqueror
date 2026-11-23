@@ -9,6 +9,7 @@
 #include "SquadPlayerState.h"
 #include "TacticalPlan.h"
 #include "EngineUtils.h"
+#include "Net/UnrealNetwork.h"
 
 ASquadPlayerController::ASquadPlayerController()
 {
@@ -30,8 +31,13 @@ void ASquadPlayerController::BeginPlay()
 		LoadAudioSettings();
 	}
 	Grid = AGridManager::Find(this);
-	GatherSquad();
-	SelectBySquadNumber(1);
+	if (IsLocalController())
+	{
+		// The server's copy of a remote player gets its squad from AssignTeam (game mode, on login); this
+		// client's copy re-gathers when PlayerTeam arrives (OnRep_PlayerTeam).
+		GatherSquad();
+		SelectBySquadNumber(1);
+	}
 }
 
 void ASquadPlayerController::GatherSquad()
@@ -150,6 +156,14 @@ TArray<ASoldier*> ASquadPlayerController::GetSelectedSoldiers() const
 void ASquadPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+
+	// Server calls queued by this player (soldier orders, loot, build, plan, debug) go out now.
+	TArray<TFunction<void()>> Calls = MoveTemp(PendingServerCalls);
+	PendingServerCalls.Reset();
+	for (TFunction<void()>& Call : Calls)
+	{
+		Call();
+	}
 
 	// Real (undilated) time: the camera keeps its speed when the debug menu slows or speeds up the game.
 	HandleCamera(FApp::GetDeltaTime());
@@ -331,8 +345,60 @@ bool ASquadPlayerController::HandleSquadBarMouse()
 
 void ASquadPlayerController::RequestLootAction(const FLootAction& Action)
 {
-	// Looting is done by the first selected soldier (the one named in the menu title).
-	SquadLoot::Execute(GetSelectedSoldier(), Action);
+	// Looting is done by the first selected soldier (the one named in the menu title), on the server.
+	if (ASoldier* Looter = GetSelectedSoldier())
+	{
+		CallServer([=, this]() { ServerLootAction(Looter, Action); });
+	}
+}
+
+void ASquadPlayerController::ServerLootAction_Implementation(ASoldier* Looter, const FLootAction& Action)
+{
+	if (Looter && Looter->Team == PlayerTeam && !Looter->IsDead())
+	{
+		SquadLoot::Execute(Looter, Action); // Checks reach and what the source holds itself.
+		Looter->ForceNetUpdate();
+	}
+}
+
+void ASquadPlayerController::ServerSoldierOrder_Implementation(const FSoldierOrder& Order)
+{
+	if (!HasAuthority())
+	{
+		return; // Never run a client's order anywhere but the server.
+	}
+	// Only this player's own living soldiers take orders from it (GDD §4.1: one squad per player).
+	ASoldier* Soldier = Order.Soldier.Get();
+	if (!Soldier || Soldier->Team != PlayerTeam || Soldier->IsDead()
+		|| (Soldier->GetOwningPlayer() && Soldier->GetOwningPlayer() != PlayerState))
+	{
+		return;
+	}
+	Soldier->ExecuteOrder(Order);
+}
+
+void ASquadPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASquadPlayerController, PlayerTeam);
+}
+
+void ASquadPlayerController::AssignTeam(ESquadTeam Team)
+{
+	check(HasAuthority());
+	PlayerTeam = Team;
+	if (ASquadPlayerState* PS = GetPlayerState<ASquadPlayerState>())
+	{
+		PS->Team = Team;
+	}
+	GatherSquad(); // Server: also makes this player the squad's owner (kill feed, orders).
+	SelectBySquadNumber(1);
+}
+
+void ASquadPlayerController::OnRep_PlayerTeam()
+{
+	GatherSquad();
+	SelectBySquadNumber(1);
 }
 
 bool ASquadPlayerController::HandleMinimapMouse()
@@ -1156,14 +1222,14 @@ bool ASquadPlayerController::HandleTacticalMapMouse()
 			{
 			case ASquadHUD::ETacMapAction::Close: SetTacticalMapOpen(false); break;
 			case ASquadHUD::ETacMapAction::SelectTool: SetTacticalTool(Button.Tool); break;
-			case ASquadHUD::ETacMapAction::ClearPlan: ServerClearTacticalMarkers(); break;
-			case ASquadHUD::ETacMapAction::RequestOrders: ServerRequestOrders(); break;
-			case ASquadHUD::ETacMapAction::Acknowledge: ServerAcknowledgeOrderRequest(Button.Param); break;
+			case ASquadHUD::ETacMapAction::ClearPlan: CallServer([this]() { ServerClearTacticalMarkers(); }); break;
+			case ASquadHUD::ETacMapAction::RequestOrders: CallServer([this]() { ServerRequestOrders(); }); break;
+			case ASquadHUD::ETacMapAction::Acknowledge: CallServer([this, Id = Button.Param]() { ServerAcknowledgeOrderRequest(Id); }); break;
 			case ASquadHUD::ETacMapAction::FocusRequest: MoveCamera(Button.Location); break;
 			case ASquadHUD::ETacMapAction::ToggleDelegate:
 				if (ASquadPlayerState* Target = Button.Player.Get())
 				{
-					ServerSetPlanningDelegated(Target, !Target->bPlanningDelegated);
+					CallServer([this, Target = TObjectPtr<ASquadPlayerState>(Target), bDelegate = !Target->bPlanningDelegated]() { ServerSetPlanningDelegated(Target, bDelegate); });
 				}
 				break;
 			}
@@ -1180,7 +1246,7 @@ bool ASquadPlayerController::HandleTacticalMapMouse()
 				const int32 Id = SquadHUD->FindTacticalMarkerAt(Mouse);
 				if (Id != INDEX_NONE)
 				{
-					ServerRemoveTacticalMarker(Id);
+					CallServer([=, this]() { ServerRemoveTacticalMarker(Id); });
 				}
 			}
 			else if (TacticalPlan::ToolMarker(TacticalTool, Type))
@@ -1197,7 +1263,7 @@ bool ASquadPlayerController::HandleTacticalMapMouse()
 					FTacticalMarker Marker;
 					Marker.Type = Type;
 					Marker.Start = FVector2f(World);
-					ServerAddTacticalMarker(Marker);
+					CallServer([=, this]() { ServerAddTacticalMarker(Marker); });
 				}
 			}
 			else
@@ -1212,7 +1278,7 @@ bool ASquadPlayerController::HandleTacticalMapMouse()
 		const int32 Id = SquadHUD->FindTacticalMarkerAt(Mouse);
 		if (Id != INDEX_NONE)
 		{
-			ServerRemoveTacticalMarker(Id);
+			CallServer([=, this]() { ServerRemoveTacticalMarker(Id); });
 		}
 	}
 	return true;
@@ -1236,7 +1302,7 @@ void ASquadPlayerController::FinishPlanDraft(FPlanDraft& Draft)
 		}
 	}
 	Draft = FPlanDraft();
-	ServerAddTacticalMarker(Marker); // The server drops strokes that are too short.
+	CallServer([=, this]() { ServerAddTacticalMarker(Marker); }); // The server drops strokes that are too short.
 }
 
 // ------------------------------------------------------------------------------------------------ Command wheel (GDD §13.2)
@@ -1449,7 +1515,7 @@ bool ASquadPlayerController::HandleCommandMouse()
 			const int32 Id = bTacticalMapOpen ? SquadHUD->FindTacticalMarkerAt(Mouse) : SquadHUD->FindWorldMarkerAt(Mouse);
 			if (Id != INDEX_NONE)
 			{
-				ServerRemoveTacticalMarker(Id);
+				CallServer([=, this]() { ServerRemoveTacticalMarker(Id); });
 			}
 		}
 		return true;
@@ -1491,14 +1557,14 @@ void ASquadPlayerController::ExecuteRadialAction(ERadialAction Action, const FVe
 				}
 			}
 		}
-		ServerAddPing(ETacticalPingType::Spot, Where);
+		CallServer([=, this]() { ServerAddPing(ETacticalPingType::Spot, Where); });
 		break;
 	}
 	case ERadialAction::Ping:
-		ServerAddPing(ETacticalPingType::Ping, Origin);
+		CallServer([=, this]() { ServerAddPing(ETacticalPingType::Ping, Origin); });
 		break;
 	case ERadialAction::RequestOrders:
-		ServerRequestOrders();
+		CallServer([=, this]() { ServerRequestOrders(); });
 		break;
 	case ERadialAction::Erase:
 		CommandMode = ECommandMode::Erasing;
@@ -1528,7 +1594,7 @@ void ASquadPlayerController::ExecuteRadialAction(ERadialAction Action, const FVe
 				FTacticalMarker Marker;
 				Marker.Type = Type;
 				Marker.Start = FVector2f(Origin);
-				ServerAddTacticalMarker(Marker);
+				CallServer([=, this]() { ServerAddTacticalMarker(Marker); });
 			}
 		}
 		break;
@@ -1627,7 +1693,7 @@ void ASquadPlayerController::AddTacticalMarker(ETacticalMarkerType Type, FVector
 	{
 		Marker.Points.Add(FVector2f(P));
 	}
-	ServerAddTacticalMarker(Marker);
+	CallServer([=, this]() { ServerAddTacticalMarker(Marker); });
 }
 
 int32 ASquadPlayerController::GetTacticalMarkerCount() const

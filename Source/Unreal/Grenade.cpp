@@ -9,6 +9,9 @@
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Net/UnrealNetwork.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogSquadGrenade, Log, All);
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -33,6 +36,7 @@ namespace
 		Part->SetStaticMesh(Mesh);
 		Part->SetMaterial(0, Material);
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Part->SetCanEverAffectNavigation(false);
 		Part->SetCastShadow(false);
 		return Part;
@@ -56,6 +60,11 @@ namespace
 AGrenade::AGrenade()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	// The server owns the blast; clients fly a copy from NetLaunch so everyone sees the throw.
+	bReplicates = true;
+	bAlwaysRelevant = true;
+	SetReplicatingMovement(false);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
@@ -115,20 +124,58 @@ bool AGrenade::PlanThrow(const AGridManager& Grid, const FVector& From, const FV
 
 void AGrenade::Launch(const FGrenadeThrow& Throw, const USoldierData& Data)
 {
-	KillRadius = Data.GrenadeKillRadius;
 	KillChance = Data.GrenadeKillChance;
 	CloseStunDuration = Data.GrenadeCloseStunDuration;
-	StunRadius = Data.GrenadeStunRadius;
 	StunDuration = Data.GrenadeStunDuration;
-	Fuse = Data.GrenadeFuseAfterBounce;
 
-	Start = Throw.Start;
-	BouncePoint = Throw.BouncePoint;
-	Rest = Throw.Rest;
-	FlightDuration = Throw.FlightDuration;
-	FlightArc = Throw.ArcHeight;
+	NetLaunch.Start = Throw.Start;
+	NetLaunch.BouncePoint = Throw.BouncePoint;
+	NetLaunch.Rest = Throw.Rest;
+	NetLaunch.FlightDuration = Throw.FlightDuration;
+	NetLaunch.ArcHeight = Throw.ArcHeight;
+	NetLaunch.Fuse = Data.GrenadeFuseAfterBounce;
+	NetLaunch.KillRadius = Data.GrenadeKillRadius;
+	NetLaunch.StunRadius = Data.GrenadeStunRadius;
+	++NetLaunch.Serial;
+	BeginFlight();
+}
 
-	SetPartColor(Body, this, FLinearColor(0.12f, 0.16f, 0.08f));
+void AGrenade::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AGrenade, NetLaunch);
+}
+
+void AGrenade::OnRep_NetLaunch()
+{
+	if (NetLaunch.BodyMesh)
+	{
+		SetBodyMesh(NetLaunch.BodyMesh);
+	}
+	if (NetLaunch.Serial != 0 && Phase == EPhase::Idle)
+	{
+		BeginFlight();
+	}
+}
+
+void AGrenade::BeginFlight()
+{
+	UE_LOG(LogSquadGrenade, Log, TEXT("Grenade %s in flight on the %s: (%.0f,%.0f) -> (%.0f,%.0f)."), *GetName(),
+		GetNetMode() == NM_DedicatedServer ? TEXT("server") : GetNetMode() == NM_Client ? TEXT("client") : TEXT("local game"),
+		NetLaunch.Start.X, NetLaunch.Start.Y, NetLaunch.Rest.X, NetLaunch.Rest.Y);
+	KillRadius = NetLaunch.KillRadius;
+	StunRadius = NetLaunch.StunRadius;
+	Fuse = NetLaunch.Fuse;
+	Start = NetLaunch.Start;
+	BouncePoint = NetLaunch.BouncePoint;
+	Rest = NetLaunch.Rest;
+	FlightDuration = NetLaunch.FlightDuration;
+	FlightArc = NetLaunch.ArcHeight;
+
+	if (!NetLaunch.BodyMesh)
+	{
+		SetPartColor(Body, this, FLinearColor(0.12f, 0.16f, 0.08f));
+	}
 	SetPartColor(Blast, this, FLinearColor(1.f, 0.45f, 0.05f));
 	SetPartColor(StunRing, this, FLinearColor(0.6f, 0.25f, 0.05f));
 
@@ -142,6 +189,10 @@ void AGrenade::SetBodyMesh(UStaticMesh* Mesh)
 	if (!Mesh || !Body)
 	{
 		return;
+	}
+	if (HasAuthority())
+	{
+		NetLaunch.BodyMesh = Mesh; // Clients show the same model.
 	}
 	Body->SetStaticMesh(Mesh);
 	Body->EmptyOverrideMaterials(); // Drop the placeholder tint: the model has its own materials.
@@ -193,9 +244,16 @@ void AGrenade::Tick(float DeltaSeconds)
 		// Fireball grows to the kill radius then shrinks away.
 		const float FireballDiameter = KillRadius * 2.f * FMath::Sin(Alpha * PI);
 		Blast->SetRelativeScale3D(FVector(FMath::Max(FireballDiameter, 0.01f)));
-		if (Alpha >= 1.f)
+		if (Alpha >= 1.f && !bFinished)
 		{
-			Destroy();
+			bFinished = true;
+			Blast->SetVisibility(false);
+			StunRing->SetVisibility(false);
+			if (HasAuthority())
+			{
+				// Linger hidden a moment so clients, a little behind, can finish their own explosion first.
+				SetLifeSpan(GetNetMode() == NM_Standalone ? 0.01f : 1.f);
+			}
 		}
 		break;
 	}

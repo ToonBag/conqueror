@@ -58,6 +58,12 @@ protected:
 	/** Rebuilds the border and label. */
 	virtual void BuildVisuals();
 
+	/**
+	 * False on a dedicated server: the visuals are cosmetic, and the server can load this actor without its text
+	 * render component (a null Label crashed the server on map load).
+	 */
+	bool HasVisuals() const { return !IsRunningDedicatedServer() && Border && Label; }
+
 	UPROPERTY(VisibleAnywhere, Category = "Zone")
 	TObjectPtr<UInstancedStaticMeshComponent> Border;
 

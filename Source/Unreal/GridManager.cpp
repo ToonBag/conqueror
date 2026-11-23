@@ -58,6 +58,7 @@ AGridManager::AGridManager()
 	HoverHighlight->SetStaticMesh(PlaneMesh.Object);
 	HoverHighlight->SetMaterial(0, ShapeMaterial.Object);
 	HoverHighlight->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	HoverHighlight->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 	HoverHighlight->SetCastShadow(false);
 	HoverHighlight->SetHiddenInGame(true);
 	HoverHighlight->SetVisibility(false);

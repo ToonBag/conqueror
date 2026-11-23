@@ -204,6 +204,14 @@ bool ASoldier::ApproachBuild(EBuildableKind Kind, ABreachableWall* Wall, FIntPoi
 
 void ASoldier::CancelBuild()
 {
+	if (!HasAuthority())
+	{
+		if (BuildWall.IsValid())
+		{
+			ForwardOrder(ESoldierOrderType::CancelBuild);
+		}
+		return;
+	}
 	BuildWall = nullptr;
 	bBuildChanneling = false;
 	BuildRemaining = 0.f;
