@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -14,6 +15,7 @@ namespace
 	{
 		// Purely visual: never blocks the cursor, movement or line of sight.
 		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Mesh->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Mesh->SetCanEverAffectNavigation(false);
 		Mesh->SetCastShadow(false);
 		if (Material)
@@ -28,6 +30,10 @@ namespace
 ALootPile::ALootPile()
 {
 	PrimaryActorTick.bCanEverTick = false;
+
+	// Spawned by the server when a corpse is looted or a soldier drops items; every client sees it.
+	bReplicates = true;
+	bAlwaysRelevant = true;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 
@@ -70,9 +76,6 @@ ALootPile* ALootPile::FindOrSpawnAt(AGridManager& Grid, FIntPoint InCell)
 	if (Pile)
 	{
 		Pile->Cell = InCell;
-		UMaterialInterface* ShapeMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-		SetupLootPart(Pile->Crate, ShapeMaterial, FLinearColor(0.28f, 0.3f, 0.12f), Pile);
-		SetupLootPart(Pile->Rifle, ShapeMaterial, FLinearColor(0.25f, 0.14f, 0.06f), Pile);
 	}
 	return Pile;
 }
@@ -84,5 +87,32 @@ void ALootPile::OnContentsChanged()
 		Destroy();
 		return;
 	}
+	Rifle->SetVisibility(Contents.Weapons.Num() > 0);
+	ForceNetUpdate();
+}
+
+void ALootPile::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ALootPile, Contents);
+	DOREPLIFETIME(ALootPile, Cell);
+}
+
+void ALootPile::BeginPlay()
+{
+	Super::BeginPlay();
+	ApplyLook();
+}
+
+void ALootPile::ApplyLook()
+{
+	UMaterialInterface* ShapeMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	SetupLootPart(Crate, ShapeMaterial, FLinearColor(0.28f, 0.3f, 0.12f), this);
+	SetupLootPart(Rifle, ShapeMaterial, FLinearColor(0.25f, 0.14f, 0.06f), this);
+	Rifle->SetVisibility(Contents.Weapons.Num() > 0);
+}
+
+void ALootPile::OnRep_Contents()
+{
 	Rifle->SetVisibility(Contents.Weapons.Num() > 0);
 }

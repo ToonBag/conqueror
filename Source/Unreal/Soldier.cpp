@@ -1,5 +1,6 @@
 #include "Soldier.h"
 
+#include "BreachableWall.h"
 #include "Grenade.h"
 #include "GridManager.h"
 #include "LootSystem.h"
@@ -7,6 +8,7 @@
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
 #include "SquadGameState.h"
+#include "SquadMatchStats.h"
 #include "SquadPlayerController.h"
 #include "SquadPlayerState.h"
 #include "WeaponData.h"
@@ -21,6 +23,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -108,6 +111,7 @@ namespace
 	void SetupDecorPart(UStaticMeshComponent* Mesh)
 	{
 		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Mesh->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Mesh->SetCanEverAffectNavigation(false);
 	}
 
@@ -119,6 +123,7 @@ namespace
 		Label->SetTextRenderColor(FColor::White);
 		Label->SetCastShadow(false);
 		Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// Not AlwaysLoadOnServer: text has no font on a dedicated server, so labels stay null there (see HasLabels).
 	}
 
 	void SetPartColor(UStaticMeshComponent* Mesh, UObject* Outer, const FLinearColor& Color)
@@ -145,6 +150,12 @@ namespace
 ASoldier::ASoldier()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	// Server-simulated; every client needs every soldier (hidden enemies are hidden locally from bSpottedByEnemy).
+	bReplicates = true;
+	bAlwaysRelevant = true;
+	SetReplicatingMovement(false); // FSoldierNetState carries the position; TickClient glides to it.
+	SetNetUpdateFrequency(20.f);
 	AutoPossessAI = EAutoPossessAI::Disabled;
 	AutoPossessPlayer = EAutoReceiveInput::Disabled;
 
@@ -276,6 +287,7 @@ ASoldier::ASoldier()
 	Model->SetupAttachment(RootComponent);
 	Model->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
 	Model->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Model->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 	Model->SetCanEverAffectNavigation(false);
 	Model->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	Model->SetAnimInstanceClass(USoldierAnimInstance::StaticClass());
@@ -336,10 +348,13 @@ void ASoldier::OnConstruction(const FTransform& Transform)
 	SetPartColor(MoveMarker, this, MoveMarkerColor);
 	SetPartColor(Tracer, this, FLinearColor(1.f, 0.85f, 0.3f));
 
-	const FText Number = FText::AsNumber(GetSquadNumber());
-	NumberLabel->SetText(Number);
-	MoveMarkerLabel->SetText(Number);
-	NumberLabel->SetTextRenderColor(Team == ESquadTeam::Allies ? FColor::White : FColor(255, 170, 150));
+	if (HasLabels())
+	{
+		const FText Number = FText::AsNumber(GetSquadNumber());
+		NumberLabel->SetText(Number);
+		MoveMarkerLabel->SetText(Number);
+		NumberLabel->SetTextRenderColor(Team == ESquadTeam::Allies ? FColor::White : FColor(255, 170, 150));
+	}
 
 	UpdateModel();
 	ApplyPostureVisuals();
@@ -348,6 +363,13 @@ void ASoldier::OnConstruction(const FTransform& Transform)
 void ASoldier::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// A soldier the server spawned during play (squad.SquadsPerTeam) was constructed here before its team,
+	// number, colour and data assets arrived; they have now, so build its look again.
+	if (GetNetMode() == NM_Client && !IsNetStartupActor())
+	{
+		OnConstruction(GetActorTransform());
+	}
 
 	// GDD §4.2 loadout: one rifle (loaded from the 70 rounds), grenades and a medkit.
 	const USoldierData* D = GetSoldierData();
@@ -415,6 +437,27 @@ bool ASoldier::MoveToCell(FIntPoint Goal)
 
 bool ASoldier::MoveToCellInGroup(FIntPoint Goal, const TMap<const ASoldier*, FIntPoint>& GroupPlan)
 {
+	if (!HasAuthority())
+	{
+		// The server plans the path. Send the squad-mates' slots too, so it applies the same cohesion check.
+		ASquadPlayerController* PC = GetWorld() ? Cast<ASquadPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+		if (!PC || !PC->IsLocalController() || !CanAct())
+		{
+			return false;
+		}
+		FSoldierOrder Order;
+		Order.Soldier = this;
+		Order.Type = GroupPlan.Num() > 0 ? ESoldierOrderType::MoveInGroup : ESoldierOrderType::Move;
+		Order.Cell = Goal;
+		for (const TPair<const ASoldier*, FIntPoint>& Pair : GroupPlan)
+		{
+			Order.GroupSoldiers.Add(const_cast<ASoldier*>(Pair.Key));
+			Order.GroupCells.Add(Pair.Value);
+		}
+		PC->QueueSoldierOrder(Order);
+		ShowMoveMarker(Goal); // Shown at once; the server may still clamp the goal (GDD §4.3).
+		return true;
+	}
 	if (!CanAct() || !Grid || !Grid->IsCellFreeAsDestination(Goal, this))
 	{
 		return false;
@@ -567,6 +610,10 @@ bool ASoldier::FindCohesiveDestination(FIntPoint Goal, const TMap<const ASoldier
 
 bool ASoldier::OrderStop()
 {
+	if (!HasAuthority())
+	{
+		return CanAct() && IsMoving() && ForwardOrder(ESoldierOrderType::Stop);
+	}
 	if (!CanAct() || !IsMoving())
 	{
 		return false;
@@ -579,6 +626,10 @@ bool ASoldier::OrderStop()
 
 bool ASoldier::FaceCell(FIntPoint Cell)
 {
+	if (!HasAuthority())
+	{
+		return CanAct() && ForwardOrder(ESoldierOrderType::Face, Cell);
+	}
 	if (!CanAct() || !Grid)
 	{
 		return false;
@@ -599,6 +650,10 @@ bool ASoldier::FaceCell(FIntPoint Cell)
 
 bool ASoldier::OrderAttack(ASoldier* Target)
 {
+	if (!HasAuthority())
+	{
+		return CanAct() && Target && Target->Team != Team && !Target->IsDead() && ForwardOrder(ESoldierOrderType::Attack, FIntPoint::ZeroValue, Target);
+	}
 	if (!CanAct() || !Target || Target == this || Target->IsDead() || Target->Team == Team)
 	{
 		return false;
@@ -630,6 +685,10 @@ bool ASoldier::OrderAttack(ASoldier* Target)
 
 bool ASoldier::OrderHoldFire(bool bHold)
 {
+	if (!HasAuthority())
+	{
+		return ForwardOrder(ESoldierOrderType::HoldFire, FIntPoint::ZeroValue, nullptr, bHold ? 1 : 0);
+	}
 	if (bDead)
 	{
 		return false;
@@ -645,6 +704,10 @@ bool ASoldier::OrderHoldFire(bool bHold)
 
 bool ASoldier::ThrowGrenadeAt(FIntPoint Cell)
 {
+	if (!HasAuthority())
+	{
+		return CanAct() && GrenadeCooldown <= 0.f && !IsThrowingGrenade() && ForwardOrder(ESoldierOrderType::Grenade, Cell);
+	}
 	if (!CanAct() || !Grid || !Grid->IsInBounds(Cell) || Cell == CurrentCell || GrenadeCooldown > 0.f || IsThrowingGrenade())
 	{
 		return false;
@@ -864,6 +927,10 @@ void ASoldier::UpdateGrenadeThrow(float DeltaSeconds)
 		Grenade->SetBodyMesh(VisualData->GetGrenadeMesh(Team));
 	}
 	++GrenadesReleased;
+	if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+	{
+		Stats->RecordGrenadeThrown(*this, CurrentCell, PendingGrenadeCell);
+	}
 
 	--Inventory.Grenades;
 	GrenadeCooldown = D->GrenadeThrowCooldown;
@@ -872,6 +939,10 @@ void ASoldier::UpdateGrenadeThrow(float DeltaSeconds)
 
 bool ASoldier::OrderStance(ESoldierStance NewStance)
 {
+	if (!HasAuthority())
+	{
+		return CanAct() && !bInjured && !IsDragging() && ForwardOrder(ESoldierOrderType::Stance, FIntPoint::ZeroValue, nullptr, static_cast<int32>(NewStance));
+	}
 	if (!CanAct() || bInjured || IsDragging())
 	{
 		return false;
@@ -949,6 +1020,10 @@ void ASoldier::Die(const FKillCause& Cause)
 			Entry.ChancePercent = Cause.ChancePercent;
 			GameState->AddKill(Entry);
 		}
+		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+		{
+			Stats->RecordDeath(*this, Cause);
+		}
 	}
 	StopDragging(); // A dead dragger lets go; a dead soldier being dragged keeps being dragged.
 	CancelMedkit(); // A dead medic stops; a dead patient is noticed by its medic next tick.
@@ -966,13 +1041,21 @@ void ASoldier::Die(const FKillCause& Cause)
 	DestinationCell = CurrentCell;
 	ClearAttack();
 	bReloading = false;
+	ApplyDeathVisuals();
+}
+
+void ASoldier::ApplyDeathVisuals()
+{
 	SetSelected(false);
 	MoveMarker->SetVisibility(false);
-	MoveMarkerLabel->SetVisibility(false);
 	Tracer->SetVisibility(false);
-	NumberLabel->SetVisibility(false);
-	StatusLabel->SetVisibility(false);
-	HoldFireLabel->SetVisibility(false);
+	if (HasLabels())
+	{
+		MoveMarkerLabel->SetVisibility(false);
+		NumberLabel->SetVisibility(false);
+		StatusLabel->SetVisibility(false);
+		HoldFireLabel->SetVisibility(false);
+	}
 	SetBodyColor(CorpseColor);
 	ApplyPostureVisuals();
 }
@@ -1127,7 +1210,68 @@ void ASoldier::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	if (!HasAuthority())
+	{
+		TickClient(DeltaSeconds);
+		return;
+	}
+
+	TickCosmetics(DeltaSeconds); // A listen server / standalone game renders too; a dedicated server skips most of it.
+
+	if (StunRemaining > 0.f)
+	{
+		StunRemaining = FMath::Max(0.f, StunRemaining - DeltaSeconds);
+		if (StunRemaining <= 0.f && !bDead)
+		{
+			ApplyPostureVisuals(); // Stun over: back to the soldier's own stance.
+		}
+	}
+	GrenadeCooldown = FMath::Max(0.f, GrenadeCooldown - DeltaSeconds);
+	UnderFireRemaining = FMath::Max(0.f, UnderFireRemaining - DeltaSeconds);
+	DamageFlashRemaining = FMath::Max(0.f, DamageFlashRemaining - DeltaSeconds);
+	MessageRemaining = FMath::Max(0.f, MessageRemaining - DeltaSeconds);
+
+	if (bDead)
+	{
+		// A corpse only moves when someone drags it.
+		if (bStepping)
+		{
+			UpdateMovement(DeltaSeconds);
+		}
+		WriteNetState();
+		return;
+	}
+
+	UpdateDrag();
+	UpdateStress(DeltaSeconds);
+	UpdateGrenadeThrow(DeltaSeconds);
+	UpdateMedkit(DeltaSeconds);
+	UpdateBuild(DeltaSeconds);
+	// Hands are busy with the grenade during the wind-up, and with the medkit during a treatment (GDD §5.2).
+	if (!IsBusyThrowing() && !IsApplyingMedkit() && !IsBuilding())
+	{
+		UpdateAutoTarget(DeltaSeconds);
+		UpdateAttack(DeltaSeconds);
+	}
+	UpdateMovement(DeltaSeconds);
+	UpdateFacing(DeltaSeconds);
+	UpdateWeaponSetup(DeltaSeconds);
+	WriteNetState();
+}
+
+void ASoldier::TickCosmetics(float DeltaSeconds)
+{
 	UpdateLocalVisibility();
+
+	HitPreviewRemaining = FMath::Max(0.f, HitPreviewRemaining - DeltaSeconds);
+	if (TracerRemaining > 0.f)
+	{
+		TracerRemaining -= DeltaSeconds;
+		if (TracerRemaining <= 0.f)
+		{
+			Tracer->SetVisibility(false);
+		}
+	}
 
 	if (HasModel())
 	{
@@ -1154,65 +1298,336 @@ void ASoldier::Tick(float DeltaSeconds)
 		}
 	}
 
+	if (!bDead)
+	{
+		FaceCamera(NumberLabel);
+		FaceCamera(StatusLabel);
+		UpdateMoveMarker(DeltaSeconds);
+		UpdateStatusLabel();
+		UpdateHoldFireLabel();
+	}
+}
+
+void ASoldier::TickClient(float DeltaSeconds)
+{
+	// Count timers down between server updates so progress bars and clip times run smoothly; each update resets
+	// them to the server's values. Nothing here decides anything: the server does.
+	// A timer the server has paused (a medkit waiting for both soldiers to stop) changes nothing, so no update comes:
+	// stop extrapolating shortly after the last one instead of running ahead of the server.
+	const bool bExtrapolate = GetWorld() && GetWorld()->GetTimeSeconds() - LastNetStateTime < 0.25f;
+	auto CountDown = [DeltaSeconds, bExtrapolate](float& Value) { if (bExtrapolate) { Value = FMath::Max(0.f, Value - DeltaSeconds); } };
+	CountDown(GrenadeCooldown);
+	CountDown(UnderFireRemaining);
+	CountDown(DamageFlashRemaining);
+	CountDown(MessageRemaining);
+	CountDown(AimRemaining);
+	CountDown(GrenadeWindupRemaining);
+	CountDown(GrenadeFollowThroughRemaining);
+	if (bReloading) { CountDown(ReloadRemaining); }
+	if (bSettingUpWeapon) { CountDown(SetupRemaining); }
+	if (bApplyingMedkit) { CountDown(MedkitRemaining); }
+	if (bBuildChanneling) { CountDown(BuildRemaining); }
 	if (StunRemaining > 0.f)
 	{
-		StunRemaining = FMath::Max(0.f, StunRemaining - DeltaSeconds);
+		CountDown(StunRemaining);
 		if (StunRemaining <= 0.f && !bDead)
 		{
-			ApplyPostureVisuals(); // Stun over: back to the soldier's own stance.
-		}
-	}
-	GrenadeCooldown = FMath::Max(0.f, GrenadeCooldown - DeltaSeconds);
-	UnderFireRemaining = FMath::Max(0.f, UnderFireRemaining - DeltaSeconds);
-	DamageFlashRemaining = FMath::Max(0.f, DamageFlashRemaining - DeltaSeconds);
-	MessageRemaining = FMath::Max(0.f, MessageRemaining - DeltaSeconds);
-	HitPreviewRemaining = FMath::Max(0.f, HitPreviewRemaining - DeltaSeconds);
-	if (TracerRemaining > 0.f)
-	{
-		TracerRemaining -= DeltaSeconds;
-		if (TracerRemaining <= 0.f)
-		{
-			Tracer->SetVisibility(false);
+			ApplyPostureVisuals();
 		}
 	}
 
-	if (bDead)
+	// Glide to the server's position at a little over walking pace (faster when far behind), and snap if a
+	// teleport or a long hitch left it far away.
+	if (bHasNetLocation)
 	{
-		// A corpse only moves when someone drags it.
-		if (bStepping)
+		const FVector Location = GetActorLocation();
+		const FVector Target = NetState.Location;
+		const float Distance = FVector::Dist(Location, Target);
+		if (Distance > 300.f)
 		{
-			UpdateMovement(DeltaSeconds);
+			SetActorLocation(Target);
 		}
+		else if (Distance > 0.1f)
+		{
+			const float Speed = FMath::Max(GetCurrentMoveSpeed() * 1.25f, Distance * 8.f);
+			SetActorLocation(FMath::VInterpConstantTo(Location, Target, DeltaSeconds, Speed));
+		}
+		const FRotator Desired(0.f, NetState.Yaw, 0.f);
+		if (!GetActorRotation().Equals(Desired, 0.5f))
+		{
+			SetActorRotation(FMath::RInterpConstantTo(GetActorRotation(), Desired, DeltaSeconds, TurnSpeed * 1.5f));
+		}
+	}
+
+	TickCosmetics(DeltaSeconds);
+}
+
+void ASoldier::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASoldier, NetState);
+	// Identity: set once (in the level, or by the game mode before a spawned soldier begins play).
+	DOREPLIFETIME_CONDITION(ASoldier, Team, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SquadId, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SquadIndex, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SoldierColor, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, Weapon, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, SoldierData, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ASoldier, VisualData, COND_InitialOnly);
+}
+
+void ASoldier::WriteNetState()
+{
+	FSoldierNetState& S = NetState;
+	S.Location = GetActorLocation();
+	S.Yaw = GetActorRotation().Yaw;
+	S.CurrentCell = CurrentCell;
+	S.DestinationCell = DestinationCell;
+	S.StepCell = StepCell;
+	S.bStepping = bStepping;
+	S.Path = Path;
+
+	S.Stance = Stance;
+	S.bInjured = bInjured;
+	S.bDead = bDead;
+	S.StunRemaining = StunRemaining;
+	S.Stress = Stress;
+	S.bSpottedByEnemy = bSpottedByEnemy;
+	S.OwningPlayer = OwningPlayer.Get();
+
+	S.AttackTarget = AttackTarget.Get();
+	S.bAutoTarget = bAutoTarget;
+	S.bHoldFire = bHoldFire;
+	S.AimRemaining = AimRemaining;
+	S.LastHitChance = LastHitChance;
+	S.Inventory = Inventory;
+	S.bWeaponSetUp = bWeaponSetUp;
+	S.bSettingUpWeapon = bSettingUpWeapon;
+	S.SetupRemaining = SetupRemaining;
+	S.SetupDuration = SetupDuration;
+	S.SetupYaw = SetupYaw;
+	S.bReloading = bReloading;
+	S.ReloadRemaining = ReloadRemaining;
+	S.ReloadDuration = ReloadDuration;
+	S.UnderFireRemaining = UnderFireRemaining;
+	S.DamageFlashRemaining = DamageFlashRemaining;
+	S.ShotCount = ShotCount;
+	S.HitsLanded = HitsLanded;
+	S.RoundsFiredStat = RoundsFiredStat;
+	S.StressReceivedTotal = StressReceivedTotal;
+
+	S.GrenadeCooldown = GrenadeCooldown;
+	S.GrenadeWindupRemaining = GrenadeWindupRemaining;
+	S.GrenadeWindupDuration = GrenadeWindupDuration;
+	S.GrenadeFollowThroughRemaining = GrenadeFollowThroughRemaining;
+	S.PendingGrenadeCell = PendingGrenadeCell;
+	S.bGrenadeStepBack = bGrenadeStepBack;
+	S.bGrenadeStepBackStarted = bGrenadeStepBackStarted;
+	S.bThrowAfterStepBack = bThrowAfterStepBack;
+	S.GrenadeStepBackFrom = GrenadeStepBackFrom;
+	S.ThrowCount = ThrowCount;
+	S.GrenadesReleased = GrenadesReleased;
+
+	S.DraggedSoldier = DraggedSoldier.Get();
+	S.DraggedBy = DraggedBy.Get();
+	S.MedkitPatient = MedkitPatient.Get();
+	S.MedkitTreatedBy = MedkitTreatedBy.Get();
+	S.bApplyingMedkit = bApplyingMedkit;
+	S.MedkitRemaining = MedkitRemaining;
+	S.BuildableCounts.SetNumZeroed(StaticEnum<EBuildableKind>()->NumEnums() - 1); // Every kind (NumEnums counts _MAX).
+	for (const TPair<EBuildableKind, int32>& Pair : BuildableCounts)
+	{
+		if (S.BuildableCounts.IsValidIndex(static_cast<int32>(Pair.Key)))
+		{
+			S.BuildableCounts[static_cast<int32>(Pair.Key)] = Pair.Value;
+		}
+	}
+	S.BuildWall = BuildWall.Get();
+	S.BuildKind = BuildKind;
+	S.bBuildChanneling = bBuildChanneling;
+	S.BuildRemaining = BuildRemaining;
+	S.BuildDuration = BuildDuration;
+
+	S.Message = Message;
+	S.MessageRemaining = MessageRemaining;
+}
+
+void ASoldier::OnRep_NetState()
+{
+	LastNetStateTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+	ReadNetState();
+}
+
+void ASoldier::ReadNetState()
+{
+	const FSoldierNetState& S = NetState;
+	const bool bWasDead = bDead;
+	const bool bPostureChanged = Stance != S.Stance || bInjured != S.bInjured || bDead != S.bDead
+		|| (StunRemaining > 0.f) != (S.StunRemaining > 0.f) || DraggedBy.Get() != S.DraggedBy || DraggedSoldier.Get() != S.DraggedSoldier;
+
+	if (!bHasNetLocation)
+	{
+		// First update: start where the server has the soldier.
+		SetActorLocationAndRotation(S.Location, FRotator(0.f, S.Yaw, 0.f));
+		bHasNetLocation = true;
+	}
+	CurrentCell = S.CurrentCell;
+	DestinationCell = S.DestinationCell;
+	StepCell = S.StepCell;
+	bStepping = S.bStepping;
+	Path = S.Path;
+
+	Stance = S.Stance;
+	bInjured = S.bInjured;
+	bDead = S.bDead;
+	StunRemaining = S.StunRemaining;
+	Stress = S.Stress;
+	bSpottedByEnemy = S.bSpottedByEnemy;
+	OwningPlayer = S.OwningPlayer;
+
+	AttackTarget = S.AttackTarget;
+	bAutoTarget = S.bAutoTarget;
+	bHoldFire = S.bHoldFire;
+	AimRemaining = S.AimRemaining;
+	LastHitChance = S.LastHitChance;
+	Inventory = S.Inventory;
+	bWeaponSetUp = S.bWeaponSetUp;
+	bSettingUpWeapon = S.bSettingUpWeapon;
+	SetupRemaining = S.SetupRemaining;
+	SetupDuration = S.SetupDuration;
+	SetupYaw = S.SetupYaw;
+	bReloading = S.bReloading;
+	ReloadRemaining = S.ReloadRemaining;
+	ReloadDuration = S.ReloadDuration;
+	UnderFireRemaining = S.UnderFireRemaining;
+	DamageFlashRemaining = S.DamageFlashRemaining;
+	ShotCount = S.ShotCount;
+	HitsLanded = S.HitsLanded;
+	RoundsFiredStat = S.RoundsFiredStat;
+	StressReceivedTotal = S.StressReceivedTotal;
+
+	GrenadeCooldown = S.GrenadeCooldown;
+	GrenadeWindupRemaining = S.GrenadeWindupRemaining;
+	GrenadeWindupDuration = S.GrenadeWindupDuration;
+	GrenadeFollowThroughRemaining = S.GrenadeFollowThroughRemaining;
+	PendingGrenadeCell = S.PendingGrenadeCell;
+	bGrenadeStepBack = S.bGrenadeStepBack;
+	bGrenadeStepBackStarted = S.bGrenadeStepBackStarted;
+	bThrowAfterStepBack = S.bThrowAfterStepBack;
+	GrenadeStepBackFrom = S.GrenadeStepBackFrom;
+	ThrowCount = S.ThrowCount;
+	GrenadesReleased = S.GrenadesReleased;
+
+	DraggedSoldier = S.DraggedSoldier;
+	DraggedBy = S.DraggedBy;
+	MedkitPatient = S.MedkitPatient;
+	MedkitTreatedBy = S.MedkitTreatedBy;
+	bApplyingMedkit = S.bApplyingMedkit;
+	MedkitRemaining = S.MedkitRemaining;
+	BuildableCounts.Reset();
+	for (int32 Kind = 0; Kind < S.BuildableCounts.Num(); ++Kind)
+	{
+		BuildableCounts.Add(static_cast<EBuildableKind>(Kind), S.BuildableCounts[Kind]);
+	}
+	BuildWall = S.BuildWall;
+	BuildKind = S.BuildKind;
+	bBuildChanneling = S.bBuildChanneling;
+	BuildRemaining = S.BuildRemaining;
+	BuildDuration = S.BuildDuration;
+
+	// A refusal this client showed itself ("TOO FAR TO DRAG") stays up until the server has one of its own.
+	if (S.MessageRemaining > 0.f || MessageRemaining <= 0.f)
+	{
+		Message = S.Message;
+		MessageRemaining = S.MessageRemaining;
+	}
+
+	if (bDead && !bWasDead)
+	{
+		ApplyDeathVisuals();
+	}
+	else if (bPostureChanged)
+	{
+		ApplyPostureVisuals();
+	}
+}
+
+bool ASoldier::ForwardOrder(ESoldierOrderType Type, FIntPoint Cell, ASoldier* Other, int32 Param)
+{
+	ASquadPlayerController* PC = GetWorld() ? Cast<ASquadPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+	if (!PC || !PC->IsLocalController() || bDead)
+	{
+		return false;
+	}
+	FSoldierOrder Order;
+	Order.Soldier = this;
+	Order.Type = Type;
+	Order.Cell = Cell;
+	Order.Other = Other;
+	Order.Param = Param;
+	PC->QueueSoldierOrder(Order);
+	return true; // Sent. The server may still refuse it; its reason comes back on the status line.
+}
+
+void ASoldier::ExecuteOrder(const FSoldierOrder& Order)
+{
+	if (!HasAuthority())
+	{
+		return; // Orders only ever run on the server.
+	}
+	ASoldier* Other = Order.Other.Get();
+	switch (Order.Type)
+	{
+	case ESoldierOrderType::Move:         MoveToCell(Order.Cell); break;
+	case ESoldierOrderType::MoveInGroup:
+	{
+		TMap<const ASoldier*, FIntPoint> Plan;
+		for (int32 I = 0; I < Order.GroupSoldiers.Num() && I < Order.GroupCells.Num(); ++I)
+		{
+			if (const ASoldier* Mate = Order.GroupSoldiers[I].Get())
+			{
+				Plan.Add(Mate, Order.GroupCells[I]);
+			}
+		}
+		MoveToCellInGroup(Order.Cell, Plan);
+		break;
+	}
+	case ESoldierOrderType::Stop:         OrderStop(); break;
+	case ESoldierOrderType::Face:         FaceCell(Order.Cell); break;
+	case ESoldierOrderType::Attack:       OrderAttack(Other); break;
+	case ESoldierOrderType::Stance:       OrderStance(static_cast<ESoldierStance>(FMath::Clamp(Order.Param, 0, 2))); break;
+	case ESoldierOrderType::HoldFire:     OrderHoldFire(Order.Param != 0); break;
+	case ESoldierOrderType::Grenade:      ThrowGrenadeAt(Order.Cell); break;
+	case ESoldierOrderType::StartDrag:    StartDragging(Other); break;
+	case ESoldierOrderType::StopDrag:     StopDragging(); break;
+	case ESoldierOrderType::Medkit:       OrderUseMedkit(Other); break;
+	case ESoldierOrderType::CancelMedkit: CancelMedkit(); break;
+	case ESoldierOrderType::CancelBuild:  CancelBuild(); break;
+	}
+	ForceNetUpdate(); // Let the player see the result without waiting for the next regular update.
+}
+
+void ASoldier::MulticastShot_Implementation(FVector_NetQuantize From, FVector_NetQuantize To, bool bHit)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
 		return;
 	}
-
-	UpdateDrag();
-	if (HasAuthority())
+	ShowTracer(From, To, bHit);
+	if (VisualData)
 	{
-		UpdateStress(DeltaSeconds);
-		UpdateGrenadeThrow(DeltaSeconds);
-		UpdateMedkit(DeltaSeconds);
-		UpdateBuild(DeltaSeconds);
-		// Hands are busy with the grenade during the wind-up, and with the medkit during a treatment (GDD §5.2).
-		if (!IsBusyThrowing() && !IsApplyingMedkit() && !IsBuilding())
-		{
-			UpdateAutoTarget(DeltaSeconds);
-			UpdateAttack(DeltaSeconds);
-		}
+		VisualData->PlayCombatSound(this, GetWeaponData()->FireSound, From);
 	}
-	UpdateMovement(DeltaSeconds);
-	UpdateFacing(DeltaSeconds);
-	if (HasAuthority())
-	{
-		UpdateWeaponSetup(DeltaSeconds);
-	}
-
-	FaceCamera(NumberLabel);
-	FaceCamera(StatusLabel);
-	UpdateMoveMarker(DeltaSeconds);
-	UpdateStatusLabel();
-	UpdateHoldFireLabel();
 }
+
+void ASoldier::MulticastReloadSound_Implementation()
+{
+	if (VisualData && GetNetMode() != NM_DedicatedServer)
+	{
+		VisualData->PlayCombatSound(this, GetWeaponData()->ReloadSound, GetMuzzleLocation());
+	}
+}
+
 
 float ASoldier::GetCurrentMoveSpeed() const
 {
@@ -1612,6 +2027,10 @@ bool ASoldier::StartDragging(ASoldier* Target)
 		}
 		return false;
 	}
+	if (!HasAuthority())
+	{
+		return ForwardOrder(ESoldierOrderType::StartDrag, FIntPoint::ZeroValue, Target); // Checked here for the message; done on the server.
+	}
 
 	StopAfterCurrentStep();
 	ClearAttack();
@@ -1629,6 +2048,14 @@ bool ASoldier::StartDragging(ASoldier* Target)
 
 void ASoldier::StopDragging()
 {
+	if (!HasAuthority())
+	{
+		if (IsDragging())
+		{
+			ForwardOrder(ESoldierOrderType::StopDrag);
+		}
+		return;
+	}
 	const bool bWasDragging = !DraggedSoldier.IsExplicitlyNull();
 	if (ASoldier* Dragged = DraggedSoldier.Get())
 	{
@@ -1767,6 +2194,10 @@ bool ASoldier::OrderUseMedkit(ASoldier* Patient)
 	{
 		return true; // Already on it.
 	}
+	if (!HasAuthority())
+	{
+		return ForwardOrder(ESoldierOrderType::Medkit, FIntPoint::ZeroValue, Patient); // Checked here for the message; done on the server.
+	}
 	CancelMedkit(); // A previous patient.
 	CancelBuild();
 	CancelGrenadeThrow(); // A new order cancels a throw not yet released (the grenade is kept).
@@ -1847,6 +2278,14 @@ void ASoldier::BeginMedkitTreatment(ASoldier* Patient)
 
 void ASoldier::CancelMedkit()
 {
+	if (!HasAuthority())
+	{
+		if (MedkitPatient.IsValid())
+		{
+			ForwardOrder(ESoldierOrderType::CancelMedkit);
+		}
+		return;
+	}
 	if (ASoldier* Patient = MedkitPatient.Get(); Patient && Patient->MedkitTreatedBy.Get() == this)
 	{
 		Patient->MedkitTreatedBy = nullptr;
@@ -1909,6 +2348,10 @@ void ASoldier::UpdateMedkit(float DeltaSeconds)
 	if (MedkitRemaining <= 0.f)
 	{
 		--Inventory.Medkits; // GDD §5.2: used up once applied.
+		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+		{
+			Stats->RecordMedkit(*this, *Patient);
+		}
 		CancelMedkit();
 		Patient->RecoverFromInjury();
 		ShowMessage(FString::Printf(TEXT("TREATED %d"), Patient->GetSquadNumber()));
@@ -2427,6 +2870,11 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Target->Team == ESquadTeam::Allies ? TEXT("Allied") : TEXT("Axis"), Target->GetSquadNumber(),
 		DistanceMetres, *Chance.Describe(), Roll / 1000.f, bHit ? TEXT("HIT") : TEXT("miss"));
 	UE_LOG(LogTemp, Log, TEXT("%s"), *ShotLog);
+	USquadMatchStats* Stats = USquadMatchStats::Get(this);
+	if (Stats)
+	{
+		Stats->RecordShot(*this, *Target, Chance, Roll / 1000.f, bHit);
+	}
 #if !UE_BUILD_SHIPPING
 	if (GEngine)
 	{
@@ -2453,11 +2901,7 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 			Impact = Blocked.ImpactPoint;
 		}
 	}
-	ShowTracer(Muzzle, Impact, bHit);
-	if (VisualData)
-	{
-		VisualData->PlayCombatSound(this, GetWeaponData()->FireSound, Muzzle);
-	}
+	MulticastShot(Muzzle, Impact, bHit); // Tracer and gunshot on every machine.
 
 	// GDD §8.2: every round fired at a soldier stresses it, hit or miss; cover reduces that (§9).
 	const USoldierData* D = GetSoldierData();
@@ -2474,7 +2918,14 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Cause.Method = EKillMethod::Rifle;
 		Cause.Weapon = GetWeaponData();
 		Cause.ChancePercent = Chance.FinalChance;
+		const bool bWasDead = Target->IsDead();
+		const bool bWasInjured = Target->IsInjured();
 		Target->ReceiveHit(DistanceMetres, Cause);
+		if (Stats)
+		{
+			Stats->RecordHitOutcome(bWasDead ? TEXT("none") : Target->IsDead() ? TEXT("killed")
+				: (Target->IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none"));
+		}
 	}
 }
 
@@ -2499,10 +2950,7 @@ void ASoldier::StartReload()
 	BurstRoundsFired = 0;
 	ReloadRemaining = GetWeaponData()->ReloadTime * GetStressEffects().ReloadTimeMultiplier;
 	ReloadDuration = ReloadRemaining;
-	if (VisualData)
-	{
-		VisualData->PlayCombatSound(this, GetWeaponData()->ReloadSound, GetMuzzleLocation());
-	}
+	MulticastReloadSound();
 }
 
 void ASoldier::NotifyWeaponChanged()
@@ -2692,14 +3140,22 @@ void ASoldier::ApplyPostureVisuals()
 		Part->SetVisibility(bShowBean);
 	}
 	ApplyModelTint(bDead);
+	LabelBaseHeight = LabelHeight;
+	if (!HasLabels())
+	{
+		return;
+	}
 	NumberLabel->SetRelativeLocation(FVector(0.f, 0.f, LabelHeight));
 	HoldFireLabel->SetRelativeLocation(FVector(0.f, 0.f, LabelHeight + 30.f));
-	LabelBaseHeight = LabelHeight;
 	StatusLabel->SetRelativeLocation(FVector(0.f, 0.f, LabelHeight + 32.f)); // UpdateHoldFireLabel restacks it while holding.
 }
 
 void ASoldier::UpdateHoldFireLabel()
 {
+	if (!HasLabels())
+	{
+		return;
+	}
 	// GDD §5.3: shown to the soldier's own team only, so the enemy can't read who is holding fire.
 	const UWorld* World = GetWorld();
 	const ASquadPlayerController* PC = World ? Cast<ASquadPlayerController>(World->GetFirstPlayerController()) : nullptr;
@@ -2736,6 +3192,10 @@ void ASoldier::ShowMessage(const FString& InMessage, float Seconds)
 
 void ASoldier::UpdateStatusLabel()
 {
+	if (!HasLabels())
+	{
+		return;
+	}
 	FString Text;
 	FColor Color = FColor::White;
 
@@ -2841,7 +3301,7 @@ void ASoldier::UpdateStatusLabel()
 void ASoldier::ShowMoveMarker(FIntPoint Cell)
 {
 	// Move orders are private: only the commanding player sees where their soldiers are heading.
-	if (!Grid || !IsOwnedByLocalPlayer())
+	if (!Grid || !IsOwnedByLocalPlayer() || !HasLabels())
 	{
 		return;
 	}
@@ -2877,7 +3337,7 @@ void ASoldier::GetRemainingRoute(TArray<FVector>& OutPoints) const
 
 void ASoldier::UpdateMoveMarker(float DeltaSeconds)
 {
-	if (!MoveMarkerLabel->IsVisible())
+	if (!HasLabels() || !MoveMarkerLabel->IsVisible())
 	{
 		return;
 	}
@@ -2897,7 +3357,7 @@ void ASoldier::UpdateMoveMarker(float DeltaSeconds)
 void ASoldier::FaceCamera(UTextRenderComponent* Label) const
 {
 	const APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (!PC || !PC->PlayerCameraManager)
+	if (!Label || !PC || !PC->PlayerCameraManager)
 	{
 		return;
 	}

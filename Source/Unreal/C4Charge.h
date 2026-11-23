@@ -80,6 +80,9 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "C4")
 	TObjectPtr<UTextRenderComponent> Label;
 
+	/** Cosmetic only: a dedicated server has no font for text, so it never touches the label. */
+	bool HasLabel() const { return Label && !IsRunningDedicatedServer(); }
+
 private:
 	UFUNCTION()
 	void OnRep_State();

@@ -53,11 +53,50 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match|Testing")
 	TSoftObjectPtr<class UWeaponData> AxisTestMachineGun = TSoftObjectPtr<UWeaponData>(FSoftObjectPath(TEXT("/Game/Data/DA_MG42.DA_MG42")));
 
-private:
-	void SpawnBots();
+	/** Each joining player goes to the team with fewer players (Allies on a tie) and takes over its bot, if any. */
+	virtual void PostLogin(APlayerController* NewPlayer) override;
 
-	/** Gives TestMachineGunSoldier in each player-commanded squad its faction's machine gun. */
+	/** A team left with no players goes back to a bot (play testing). */
+	virtual void Logout(AController* Exiting) override;
+
+private:
+	/** Starts the match: plans, test MGs and bots. Waits for the first player on a dedicated server (squad.MinPlayers). */
+	void StartMatch();
+
+	/** Bots for squads no player commands (Except: a player logging out). */
+	void SpawnBots(const AController* Except = nullptr);
+
+	/** Gives TestMachineGunSoldier in each player-commanded squad its faction's machine gun (once per squad). */
 	void GiveTestMachineGuns();
+
+	/** Teams that have soldiers on this map. */
+	TArray<ESquadTeam> GetSquadTeams() const;
+
+	/** Players on Team, leaving out Except. */
+	int32 CountPlayers(ESquadTeam Team, const AController* Except = nullptr) const;
+
+	/** Squads (SquadKey) that have had their test machine gun. */
+	TSet<int32> SquadsGivenTestMG;
+
+	static int32 SquadKey(ESquadTeam Team, int32 SquadId) { return static_cast<int32>(Team) * 1000 + SquadId; }
+
+	/** squad.SquadsPerTeam: copies the level's squad of each team into its deployment zone until each team has that many. */
+	void SpawnExtraSquads();
+
+	/** squad.SwapSides: each faction starts in the other's deployment zone (balancing test). */
+	void SwapSides();
+
+	/** Squads of Team on this map (SquadIds, ascending). */
+	TArray<int32> GetSquadIds(ESquadTeam Team) const;
+
+	/** Squads (SquadKey) a player commands, leaving out Except. */
+	TSet<int32> GetCommandedSquads(const AController* Except = nullptr) const;
+
+	virtual void BeginPlay() override;
+
+	/** Squads per team and seed this match runs with (for the stats record). */
+	int32 NumSquadsPerTeam = 1;
+	int32 MatchSeed = 0;
 
 	/** One tactical plan per team (GDD §13.1). */
 	void SpawnTacticalPlans();
@@ -72,7 +111,7 @@ private:
 	void EndMatch(ESquadTeam Winner, EVictoryReason Reason);
 	float GetVPWinTime() const;
 
-	bool bBotsSpawned = false;
+	bool bMatchStarted = false;
 	bool bMatchEnded = false;
 
 	/** Team holding every VP right now, and for how long without a break. */

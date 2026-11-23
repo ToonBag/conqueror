@@ -7,6 +7,7 @@
 #include "TacticalPlanTypes.h"
 #include "BuildableTypes.h"
 #include "SquadDebugTypes.h"
+#include "Soldier.h"
 #include "SquadPlayerController.generated.h"
 
 class ABreachableWall;
@@ -59,9 +60,38 @@ public:
 
 	virtual void PlayerTick(float DeltaTime) override;
 
-	/** Team whose soldiers this player commands. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Squad")
+	/** Team whose soldiers this player commands. Set by the server's game mode when the player joins. */
+	UPROPERTY(ReplicatedUsing = OnRep_PlayerTeam, EditAnywhere, BlueprintReadOnly, Category = "Squad")
 	ESquadTeam PlayerTeam = ESquadTeam::Allies;
+
+	/** Which of PlayerTeam's squads this player commands (ASoldier::SquadId; one squad per player, GDD §4.1). */
+	UPROPERTY(ReplicatedUsing = OnRep_PlayerTeam, EditAnywhere, BlueprintReadOnly, Category = "Squad")
+	int32 PlayerSquadId = 0;
+
+	/** True if Soldier is in this player's own squad (team and squad). */
+	bool IsOwnSquad(const ASoldier* Soldier) const { return Soldier && Soldier->Team == PlayerTeam && Soldier->SquadId == PlayerSquadId; }
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	/** Server: put this player on Team and give it that team's squad SquadId. */
+	void AssignTeam(ESquadTeam Team, int32 SquadId = 0);
+
+	/**
+	 * Client: send Order to the server on this controller's next tick. Queued rather than sent at once so an order
+	 * issued from editor Python also goes over the network (UE runs RPCs called from editor scripts locally).
+	 */
+	void QueueSoldierOrder(const FSoldierOrder& Order) { CallServer([this, Order]() { ServerSoldierOrder(Order); }); }
+
+	/** Client: make a Server RPC call on this controller's next tick (see QueueSoldierOrder for why). */
+	void CallServer(TFunction<void()>&& Call) { PendingServerCalls.Add(MoveTemp(Call)); }
+
+	/** Server: an order for one of this player's soldiers (sent by ASoldier::ForwardOrder on the client). */
+	UFUNCTION(Server, Reliable)
+	void ServerSoldierOrder(const FSoldierOrder& Order);
+
+	/** Server: a loot or trade action by one of this player's soldiers (GDD §5.5). */
+	UFUNCTION(Server, Reliable)
+	void ServerLootAction(ASoldier* Looter, const FLootAction& Action);
 
 	/** Two taps of the same number key (1-4) within this many seconds centre the camera on that soldier (GDD §13). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Squad|Input", meta = (ClampMin = "0.05", ClampMax = "1", Units = "s"))
@@ -278,7 +308,7 @@ public:
 
 	/** Drop a ping for the team (GDD §13.2). Everyone may. */
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void AddPing(ETacticalPingType Type, FVector2D Location) { ServerAddPing(Type, Location); }
+	void AddPing(ETacticalPingType Type, FVector2D Location) { CallServer([=, this]() { ServerAddPing(Type, Location); }); }
 
 	UFUNCTION(Server, Reliable)
 	void ServerAddPing(ETacticalPingType Type, FVector2D Location);
@@ -294,7 +324,7 @@ public:
 
 	/** Ask the CO / XO for orders, marked at this player's squad (GDD §13.1). */
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void RequestOrders() { ServerRequestOrders(); }
+	void RequestOrders() { CallServer([=, this]() { ServerRequestOrders(); }); }
 
 	/**
 	 * Draw a mark on the team's plan, exactly as the tactical map's tools do (world XY in cm). Start is the point for
@@ -304,16 +334,16 @@ public:
 	void AddTacticalMarker(ETacticalMarkerType Type, FVector2D Start, FVector2D End, const TArray<FVector2D>& RoutePoints);
 
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void RemoveTacticalMarker(int32 MarkerId) { ServerRemoveTacticalMarker(MarkerId); }
+	void RemoveTacticalMarker(int32 MarkerId) { CallServer([=, this]() { ServerRemoveTacticalMarker(MarkerId); }); }
 
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void ClearTacticalPlan() { ServerClearTacticalMarkers(); }
+	void ClearTacticalPlan() { CallServer([=, this]() { ServerClearTacticalMarkers(); }); }
 
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void AcknowledgeOrderRequest(int32 RequestId) { ServerAcknowledgeOrderRequest(RequestId); }
+	void AcknowledgeOrderRequest(int32 RequestId) { CallServer([=, this]() { ServerAcknowledgeOrderRequest(RequestId); }); }
 
 	UFUNCTION(BlueprintCallable, Category = "Squad|Tactical Map")
-	void SetPlanningDelegated(ASquadPlayerState* Target, bool bDelegated) { ServerSetPlanningDelegated(Target, bDelegated); }
+	void SetPlanningDelegated(ASquadPlayerState* Target, bool bDelegated) { CallServer([=, this]() { ServerSetPlanningDelegated(Target, bDelegated); }); }
 
 	/** Number of marks / open requests on this player's copy of the team plan (-1: no plan here). For tests. */
 	UFUNCTION(BlueprintPure, Category = "Squad|Tactical Map")
@@ -399,9 +429,15 @@ public:
 	void ServerDebugAction(ESquadDebugAction Action, float Param, FIntPoint Cell, const TArray<ASoldier*>& Targets);
 
 protected:
+	UFUNCTION()
+	void OnRep_PlayerTeam();
+
 	virtual void BeginPlay() override;
 
 private:
+	/** Server RPC calls waiting for PlayerTick (CallServer). */
+	TArray<TFunction<void()>> PendingServerCalls;
+
 	// Audio settings (SquadPlayerControllerAudio.cpp).
 	float MasterVolume = 1.f;
 	bool bAudioMuted = false;
@@ -476,6 +512,10 @@ private:
 	FPlanDraft CommandDraft;
 	FBuildFeedback BuildFeedback;
 	void ShowBuildFeedback(const FString& Text, const FVector2D& World);
+
+	/** Server -> owning client: a build order was refused (GDD §13.3), shown at the wheel's point. */
+	UFUNCTION(Client, Reliable)
+	void ClientBuildFeedback(const FString& Text, FVector2D World);
 
 	/** Middle mouse released this soon without choosing a slice: a quick Ping. */
 	static constexpr double QuickTapTime = 0.25;

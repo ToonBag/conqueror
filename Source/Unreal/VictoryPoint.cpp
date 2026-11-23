@@ -3,6 +3,7 @@
 #include "GridManager.h"
 #include "MapZoneColors.h"
 #include "Soldier.h"
+#include "SquadMatchStats.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
@@ -42,6 +43,7 @@ AVictoryPoint::AVictoryPoint()
 		Part->SetupAttachment(RootComponent);
 		Part->SetStaticMesh(Mesh);
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Part->SetCanEverAffectNavigation(false);
 		Part->SetMobility(EComponentMobility::Movable);
 		return Part;
@@ -128,6 +130,13 @@ void AVictoryPoint::UpdateOwnership()
 			UE_LOG(LogVictoryPoint, Log, TEXT("Victory point %s captured by %s"), *PointName.ToString(),
 				NewTeam == ESquadTeam::Allies ? TEXT("Allies") : TEXT("Axis"));
 		}
+		if (bNewOwned && (!bOwned || NewTeam != OwningTeam))
+		{
+			if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
+			{
+				Stats->RecordVPCapture(*this, NewTeam);
+			}
+		}
 		bOwned = bNewOwned;
 		OwningTeam = NewTeam;
 		bContested = bNewContested;
@@ -154,6 +163,10 @@ FLinearColor AVictoryPoint::GetZoneColor() const
 void AVictoryPoint::BuildVisuals()
 {
 	Super::BuildVisuals();
+	if (!HasVisuals())
+	{
+		return;
+	}
 	// The letter sits in front of the pole (towards -Y) so it isn't hidden under it.
 	Label->SetRelativeLocation(FVector(0.f, -110.f, 3.f));
 	Label->SetWorldSize(140.f);
@@ -162,6 +175,10 @@ void AVictoryPoint::BuildVisuals()
 
 void AVictoryPoint::RefreshFlag()
 {
+	if (!HasVisuals() || !Flag)
+	{
+		return;
+	}
 	if (!FlagMaterial)
 	{
 		if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))

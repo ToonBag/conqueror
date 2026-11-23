@@ -37,8 +37,14 @@ namespace
 	}
 }
 
+void ASquadPlayerController::ClientBuildFeedback_Implementation(const FString& Text, FVector2D World)
+{
+	ShowBuildFeedback(Text, World);
+}
+
 void ASquadPlayerController::ShowBuildFeedback(const FString& Text, const FVector2D& World)
 {
+	UE_LOG(LogTemp, Log, TEXT("Build refused: %s"), *Text);
 	BuildFeedback.Text = Text;
 	BuildFeedback.World = World;
 	BuildFeedback.Time = GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
@@ -188,7 +194,7 @@ TArray<ASquadPlayerController::FBuildWheelItem> ASquadPlayerController::GetBuild
 
 void ASquadPlayerController::OrderBuildSelected(EBuildableKind Kind, FVector2D WorldPoint)
 {
-	ServerOrderBuild(Kind, WorldPoint, GetSelectedSoldiers());
+	CallServer([this, Kind, WorldPoint, Soldiers = GetSelectedSoldiers()]() { ServerOrderBuild(Kind, WorldPoint, Soldiers); });
 }
 
 void ASquadPlayerController::ServerOrderBuild_Implementation(EBuildableKind Kind, FVector2D WorldPoint, const TArray<ASoldier*>& Candidates)
@@ -208,8 +214,8 @@ void ASquadPlayerController::ServerOrderBuild_Implementation(EBuildableKind Kind
 	ASoldier* Builder = FindBuilderFor(Kind, Wall, WallCell, Mine, &Reason);
 	if (!Builder || !Builder->OrderBuild(Kind, Wall, WallCell))
 	{
-		// Feedback at the wheel's point. Once soldiers replicate and players are remote this becomes a client RPC.
-		ShowBuildFeedback(Reason.IsEmpty() ? FString(TEXT("BLOCKED")) : Reason, WorldPoint);
+		// Feedback at the wheel's point, on the player's own screen.
+		ClientBuildFeedback(Reason.IsEmpty() ? FString(TEXT("BLOCKED")) : Reason, WorldPoint);
 	}
 }
 

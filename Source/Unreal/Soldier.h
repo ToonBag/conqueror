@@ -10,6 +10,7 @@
 #include "Soldier.generated.h"
 
 class ABreachableWall;
+class ASoldier;
 class AGridManager;
 class APlayerState;
 class USoldierData;
@@ -58,7 +59,129 @@ struct FHitChanceInfo
 };
 
 /**
+ * Everything a client needs to show a soldier: the server copies its live fields in here every tick
+ * (ASoldier::WriteNetState), and clients copy them back into the same fields (ReadNetState), so the HUD and
+ * animation code read one set of fields everywhere. Server-only state (RNG, scan timers, AI choices) stays out.
+ */
+USTRUCT()
+struct FSoldierNetState
+{
+	GENERATED_BODY()
+
+	// Movement: clients glide the soldier to Location / Yaw (see ASoldier::TickClient).
+	UPROPERTY() FVector_NetQuantize10 Location = FVector::ZeroVector;
+	UPROPERTY() float Yaw = 0.f;
+	UPROPERTY() FIntPoint CurrentCell = FIntPoint::ZeroValue;
+	UPROPERTY() FIntPoint DestinationCell = FIntPoint::ZeroValue;
+	UPROPERTY() FIntPoint StepCell = FIntPoint::ZeroValue;
+	UPROPERTY() bool bStepping = false;
+	UPROPERTY() TArray<FIntPoint> Path;
+
+	// Condition.
+	UPROPERTY() ESoldierStance Stance = ESoldierStance::Standing;
+	UPROPERTY() bool bInjured = false;
+	UPROPERTY() bool bDead = false;
+	UPROPERTY() float StunRemaining = 0.f;
+	UPROPERTY() float Stress = 0.f;
+	UPROPERTY() bool bSpottedByEnemy = false;
+	UPROPERTY() TObjectPtr<APlayerState> OwningPlayer;
+
+	// Combat.
+	UPROPERTY() TObjectPtr<ASoldier> AttackTarget;
+	UPROPERTY() bool bAutoTarget = false;
+	UPROPERTY() bool bHoldFire = false;
+	UPROPERTY() float AimRemaining = 0.f;
+	UPROPERTY() float LastHitChance = -1.f;
+	UPROPERTY() FLootInventory Inventory;
+	UPROPERTY() bool bWeaponSetUp = false;
+	UPROPERTY() bool bSettingUpWeapon = false;
+	UPROPERTY() float SetupRemaining = 0.f;
+	UPROPERTY() float SetupDuration = 0.f;
+	UPROPERTY() float SetupYaw = 0.f;
+	UPROPERTY() bool bReloading = false;
+	UPROPERTY() float ReloadRemaining = 0.f;
+	UPROPERTY() float ReloadDuration = 0.f;
+	UPROPERTY() float UnderFireRemaining = 0.f;
+	UPROPERTY() float DamageFlashRemaining = 0.f;
+	UPROPERTY() int32 ShotCount = 0;
+	UPROPERTY() int32 HitsLanded = 0;
+	UPROPERTY() int32 RoundsFiredStat = 0;
+	UPROPERTY() float StressReceivedTotal = 0.f;
+
+	// Grenade throw.
+	UPROPERTY() float GrenadeCooldown = 0.f;
+	UPROPERTY() float GrenadeWindupRemaining = 0.f;
+	UPROPERTY() float GrenadeWindupDuration = 0.f;
+	UPROPERTY() float GrenadeFollowThroughRemaining = 0.f;
+	UPROPERTY() FIntPoint PendingGrenadeCell = FIntPoint::ZeroValue;
+	UPROPERTY() bool bGrenadeStepBack = false;
+	UPROPERTY() bool bGrenadeStepBackStarted = false;
+	UPROPERTY() bool bThrowAfterStepBack = false;
+	UPROPERTY() FIntPoint GrenadeStepBackFrom = FIntPoint::ZeroValue;
+	UPROPERTY() int32 ThrowCount = 0;
+	UPROPERTY() int32 GrenadesReleased = 0;
+
+	// Drag, medkit, build.
+	UPROPERTY() TObjectPtr<ASoldier> DraggedSoldier;
+	UPROPERTY() TObjectPtr<ASoldier> DraggedBy;
+	UPROPERTY() TObjectPtr<ASoldier> MedkitPatient;
+	UPROPERTY() TObjectPtr<ASoldier> MedkitTreatedBy;
+	UPROPERTY() bool bApplyingMedkit = false;
+	UPROPERTY() float MedkitRemaining = 0.f;
+	/** Buildables left, indexed by EBuildableKind. */
+	UPROPERTY() TArray<int32> BuildableCounts;
+	UPROPERTY() TObjectPtr<ABreachableWall> BuildWall;
+	UPROPERTY() EBuildableKind BuildKind = EBuildableKind::C4;
+	UPROPERTY() bool bBuildChanneling = false;
+	UPROPERTY() float BuildRemaining = 0.f;
+	UPROPERTY() float BuildDuration = 0.f;
+
+	// Status line text set by an order the server refused or changed ("SQUAD LIMIT", "NO LINE OF SIGHT").
+	UPROPERTY() FString Message;
+	UPROPERTY() float MessageRemaining = 0.f;
+};
+
+/** An order a client sends for one of its soldiers (ASquadPlayerController::ServerSoldierOrder). */
+UENUM()
+enum class ESoldierOrderType : uint8
+{
+	Move,
+	MoveInGroup,
+	Stop,
+	Face,
+	Attack,
+	Stance,
+	HoldFire,
+	Grenade,
+	StartDrag,
+	StopDrag,
+	Medkit,
+	CancelMedkit,
+	CancelBuild
+};
+
+USTRUCT()
+struct FSoldierOrder
+{
+	GENERATED_BODY()
+
+	UPROPERTY() TObjectPtr<ASoldier> Soldier;
+	UPROPERTY() ESoldierOrderType Type = ESoldierOrderType::Move;
+	UPROPERTY() FIntPoint Cell = FIntPoint::ZeroValue;
+	/** Attack target, drag casualty or medkit patient. */
+	UPROPERTY() TObjectPtr<ASoldier> Other;
+	/** Stance (as uint8) or hold fire (0 / 1). */
+	UPROPERTY() int32 Param = 0;
+	/** MoveInGroup: the slot each squad-mate in the same order is heading to. */
+	UPROPERTY() TArray<TObjectPtr<ASoldier>> GroupSoldiers;
+	UPROPERTY() TArray<FIntPoint> GroupCells;
+};
+
+/**
  * A squad member. Placeholder "bean" body; moves one grid cell at a time.
+ *
+ * Networking: the server simulates every soldier (Tick, HasAuthority) and replicates FSoldierNetState. Clients
+ * only animate (TickClient). An order called on a client is sent to the server (ForwardOrder) and runs there.
  * Stance and health are shown by the bean's posture plus a status line above its number,
  * since there are no proper models or animations yet.
  */
@@ -72,32 +195,44 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	/** Server: run an order a client sent for this soldier (the controller has checked it is that player's). */
+	void ExecuteOrder(const FSoldierOrder& Order);
 
 	// ---------------------------------------------------------------- Identity / tuning
 
 	/** Order within the squad (0-3). The soldier is labelled SquadIndex+1 and number key SquadIndex+1 selects it. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0", ClampMax = "3"))
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0", ClampMax = "3"))
 	int32 SquadIndex = 0;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	ESquadTeam Team = ESquadTeam::Allies;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	/**
+	 * Which of its team's squads this soldier belongs to (0 = the squad placed in the level). A team holds one
+	 * squad per player (GDD §4.1); the game mode spawns squads beyond the first (squad.SquadsPerTeam). Team,
+	 * squad, number, colour and data assets replicate once, so soldiers spawned during play are right on clients.
+	 */
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier", meta = (ClampMin = "0"))
+	int32 SquadId = 0;
+
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	FLinearColor SoldierColor = FLinearColor(0.2f, 0.4f, 0.9f);
 
 	/**
 	 * Starting rifle. Falls back to UWeaponData class defaults (M1 Garand) if unset. During play the rifle
 	 * actually held lives in the inventory and can change by looting (GDD §5.5); use GetWeaponData().
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<UWeaponData> Weapon;
 
 	/** Loadout, stance speeds, damage and grenade tuning. Falls back to class defaults if unset. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<USoldierData> SoldierData;
 
 	/** Uniformed models, held rifle / grenade attachment and animation clips. Without it the soldier is a bean. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Soldier")
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadOnly, Category = "Soldier")
 	TObjectPtr<USoldierVisualData> VisualData;
 
 	/** Colour of the flashing square on the cell this soldier has been ordered to. */
@@ -136,9 +271,11 @@ public:
 	bool HasSetupWeapon() const;
 
 	/** Set up and able to fire across its arc. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|Combat")
 	bool IsWeaponSetUp() const { return bWeaponSetUp; }
 
 	/** Setting up right now (standing still, facing the way it will fire). */
+	UFUNCTION(BlueprintPure, Category = "Soldier|Combat")
 	bool IsSettingUpWeapon() const { return bSettingUpWeapon; }
 
 	/** Seconds of set-up left (0 when set up or not setting up). */
@@ -182,10 +319,13 @@ public:
 	// ---------------------------------------------------------------- Animation queries (cosmetic)
 
 	/** Rounds fired so far; the animation plays a recoil each time it goes up. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|Testing")
 	int32 GetShotCount() const { return ShotCount; }
 
 	/** Grenade throws started (orders accepted) and grenades that actually left the hand. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|Testing")
 	int32 GetThrowCount() const { return ThrowCount; }
+	UFUNCTION(BlueprintPure, Category = "Soldier|Testing")
 	int32 GetGrenadesReleased() const { return GrenadesReleased; }
 
 	/** 0 when the wind-up starts, 1 when the grenade leaves the hand (GDD §7 wind-up). 0 when not winding up. */
@@ -226,8 +366,11 @@ public:
 
 	// ---------------------------------------------------------------- Squad cohesion (GDD §4.3, server only)
 
-	/** Same squad. One squad per team for now; this becomes the owning player's squad once teams hold several. */
-	bool IsSquadMate(const ASoldier* Other) const { return Other && Other != this && Other->Team == Team; }
+	/** Same squad: same team and squad (GDD §4.3 holds each squad together, not the whole team). */
+	bool IsSquadMate(const ASoldier* Other) const { return Other && Other != this && Other->Team == Team && Other->SquadId == SquadId; }
+
+	/** Server: reseeds this soldier's hit-roll stream (reproducible test matches, squad.MatchSeed). */
+	void SeedRandom(int32 Seed) { Rng.Initialize(Seed); }
 
 	/** Where this soldier counts for the cohesion limit: the cell it is heading to (its dragger's, while dragged). */
 	FIntPoint GetCohesionCell(const TMap<const ASoldier*, FIntPoint>* GroupPlan = nullptr) const;
@@ -351,7 +494,12 @@ public:
 	bool CanAct() const { return !bDead && StunRemaining <= 0.f && !IsBeingDragged(); }
 
 	/** True from the throw order until the grenade leaves the hand: finishing a step, stepping back and winding up (GDD §7). */
+	UFUNCTION(BlueprintPure, Category = "Soldier")
 	bool IsThrowingGrenade() const { return bGrenadeStepBack || GrenadeWindupRemaining > 0.f; }
+
+	/** The status-line message from the last refused or changed order ("BLOCKED", "SQUAD LIMIT"), empty once it times out. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|Testing")
+	FString GetStatusMessage() const { return MessageRemaining > 0.f ? Message : FString(); }
 
 	/** Drops a throw that hasn't released yet; the grenade is kept. A step back already under way still finishes. */
 	void CancelGrenadeThrow();
@@ -513,11 +661,15 @@ public:
 	void DebugRestock();
 
 	/** Debug: puts the soldier on Cell at once, dropping every order. False if the cell can't take it. */
+	UFUNCTION(BlueprintCallable, Category = "Soldier|Debug")
 	bool DebugTeleportTo(FIntPoint Cell);
 
 	/** Debug: injure (a second call kills), stun or kill, even under squad.GodMode. */
+	UFUNCTION(BlueprintCallable, Category = "Soldier|Debug")
 	void DebugInjure();
+	UFUNCTION(BlueprintCallable, Category = "Soldier|Debug")
 	void DebugStun(float Seconds);
+	UFUNCTION(BlueprintCallable, Category = "Soldier|Debug")
 	void DebugKill();
 
 	/** squad.GodMode 1: soldiers commanded by a player ignore rifle hits, grenade / C4 blasts and stuns. */
@@ -702,6 +854,44 @@ protected:
 	TObjectPtr<UStaticMeshComponent> GrenadeModel;
 
 private:
+	// ---------------------------------------------------------------- Networking
+	UPROPERTY(ReplicatedUsing = OnRep_NetState)
+	FSoldierNetState NetState;
+
+	UFUNCTION()
+	void OnRep_NetState();
+
+	/** Server: copy the live fields into NetState (end of every Tick). */
+	void WriteNetState();
+
+	/** Client: copy NetState into the live fields and refresh visuals that depend on what changed. */
+	void ReadNetState();
+
+	/** Client tick: glide to the server's position, count down timers between updates, cosmetics. */
+	void TickClient(float DeltaSeconds);
+
+	/** Cosmetics shared by server and client ticks (labels, move marker, rifle and grenade models). */
+	void TickCosmetics(float DeltaSeconds);
+
+	/** Corpse look: grey body, labels and markers off (server on death, clients when bDead arrives). */
+	void ApplyDeathVisuals();
+
+	/** Client: send an order for this soldier to the server through the local player controller. */
+	bool ForwardOrder(ESoldierOrderType Type, FIntPoint Cell = FIntPoint::ZeroValue, ASoldier* Other = nullptr, int32 Param = 0);
+
+	/** A round fired: tracer and gunshot everywhere (cosmetic; the hit was rolled on the server). */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastShot(FVector_NetQuantize From, FVector_NetQuantize To, bool bHit);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastReloadSound();
+
+	/** A server update has arrived: TickClient glides towards NetState.Location. */
+	bool bHasNetLocation = false;
+
+	/** World time of the last NetState update. Timers only count down for a moment past it (a paused one stays put). */
+	float LastNetStateTime = 0.f;
+
 	/** Model, uniform and held props from VisualData and Team; falls back to the bean without them. */
 	void UpdateModel();
 	/** Put the held rifle's mesh in the soldier's hands. */
@@ -742,6 +932,8 @@ private:
 	void ShowMoveMarker(FIntPoint Cell);
 	void UpdateMoveMarker(float DeltaSeconds);
 	void FaceCamera(UTextRenderComponent* Label) const;
+	/** False on a dedicated server, which doesn't load the (cosmetic) text labels: text has no font there. */
+	bool HasLabels() const { return NumberLabel && StatusLabel && HoldFireLabel && MoveMarkerLabel; }
 	float GetCurrentMoveSpeed() const;
 	void FollowDragger(FIntPoint Cell);
 	void UpdateDrag();

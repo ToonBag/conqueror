@@ -2,6 +2,7 @@
 
 #include "BreachableWall.h"
 #include "CoverData.h"
+#include "ExplosionFX.h"
 #include "Grenade.h"
 #include "GridManager.h"
 #include "KillFeedTypes.h"
@@ -34,6 +35,7 @@ namespace
 		Part->SetStaticMesh(Mesh);
 		Part->SetMaterial(0, Material);
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Part->SetCanEverAffectNavigation(false);
 		Part->SetCastShadow(false);
 		Part->SetupAttachment(Parent);
@@ -181,7 +183,7 @@ void AC4Charge::Tick(float DeltaSeconds)
 		// Blinks faster as the fuse runs down: 2 Hz at 5 s left, ~8 Hz at the end.
 		const float Rate = FMath::Lerp(8.f, 2.f, FMath::Clamp(FuseRemaining / 5.f, 0.f, 1.f));
 		Light->SetVisibility(FMath::Frac(StateTime * Rate) < 0.5f && !IsHidden());
-		Label->SetText(FText::FromString(FString::Printf(TEXT("C4 %.1f"), FuseRemaining)));
+		if (HasLabel()) Label->SetText(FText::FromString(FString::Printf(TEXT("C4 %.1f"), FuseRemaining)));
 
 		if (HasAuthority() && bArmed)
 		{
@@ -280,16 +282,22 @@ void AC4Charge::ApplyStateVisuals()
 	case EC4State::Armed:
 		Blast->SetVisibility(false);
 		StunRing->SetVisibility(false);
-		Label->SetTextRenderColor(FColor(255, 90, 60));
+		if (HasLabel()) Label->SetTextRenderColor(FColor(255, 90, 60));
 		break;
 	case EC4State::Detonated:
 	{
 		Body->SetVisibility(false);
 		Light->SetVisibility(false);
-		Label->SetVisibility(false);
+		if (HasLabel()) Label->SetVisibility(false);
+		// Cosmetic, local to each machine (none on a dedicated server). Its ground dust rolls out to the stun radius.
+		if (AExplosionFX::SpawnAt(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, ChargeHeight), 1.4f, StunRadius))
+		{
+			break;
+		}
+		// Placeholder when the effect assets are missing: orange ball, and the stun radius on the ground
+		// (cylinder is 100 cm across: scale = diameter in metres).
 		Blast->SetVisibility(true);
 		SetPartColor(Blast, this, FLinearColor(1.f, 0.45f, 0.05f));
-		// Stun radius on the ground (cylinder is 100 cm across: scale = diameter in metres).
 		StunRing->SetVisibility(true);
 		StunRing->SetAbsolute(false, true, false);
 		StunRing->SetWorldRotation(FRotator::ZeroRotator);
@@ -302,8 +310,8 @@ void AC4Charge::ApplyStateVisuals()
 		SetPartColor(Body, this, FLinearColor(0.15f, 0.15f, 0.14f));
 		Blast->SetVisibility(true);
 		SetPartColor(Blast, this, FLinearColor(0.45f, 0.45f, 0.45f));
-		Label->SetText(FText::FromString(TEXT("DUD")));
-		Label->SetTextRenderColor(FColor(190, 190, 190));
+		if (HasLabel()) Label->SetText(FText::FromString(TEXT("DUD")));
+		if (HasLabel()) Label->SetTextRenderColor(FColor(190, 190, 190));
 		break;
 	}
 }

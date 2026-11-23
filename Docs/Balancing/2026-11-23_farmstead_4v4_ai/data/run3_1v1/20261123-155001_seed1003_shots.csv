@@ -1,0 +1,15 @@
+time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,hit,outcome
+13.63,Axis-S1-1,Axis,Gewehr 43,standing,0.0,Allies-S1-1,standing,1,5.71,80.000,1.000,None,0.0,1,80.000,67.356,50,34,53,29,1,injured
+14.43,Allies-S1-4,Allies,M1 Garand,standing,0.0,Axis-S1-4,standing,1,5.83,85.000,1.000,None,0.0,1,85.000,64.178,39,29,41,35,1,injured
+15.20,Axis-S1-1,Axis,Gewehr 43,standing,0.0,Allies-S1-1,prone,1,5.23,80.000,1.000,None,0.0,1,80.000,10.806,50,34,52,29,1,killed
+15.93,Allies-S1-4,Allies,M1 Garand,standing,0.0,Axis-S1-4,prone,1,5.37,85.000,1.000,None,0.0,1,85.000,15.868,39,29,40,34,1,killed
+16.00,Axis-S1-2,Axis,Gewehr 43,standing,0.0,Allies-S1-3,standing,0,4.47,80.000,1.000,None,0.0,1,80.000,6.816,35,31,31,29,1,killed
+16.10,Axis-S1-1,Axis,Gewehr 43,standing,0.0,Allies-S1-4,standing,0,12.08,68.000,1.000,None,0.0,1,68.000,52.225,50,34,39,29,1,injured
+16.53,Allies-S1-4,Allies,M1 Garand,prone,5.0,Axis-S1-1,standing,0,12.08,65.000,1.000,None,0.0,1,65.000,37.217,39,29,50,34,1,injured
+17.67,Axis-S1-1,Axis,Gewehr 43,prone,4.8,Allies-S1-4,prone,0,12.08,68.000,1.000,None,0.0,1,68.000,78.549,50,34,39,29,0,
+18.03,Allies-S1-4,Allies,M1 Garand,prone,9.4,Axis-S1-1,prone,0,12.08,65.000,1.000,None,0.0,1,65.000,44.512,39,29,50,34,1,killed
+18.17,Axis-S1-2,Axis,Gewehr 43,standing,0.0,Allies-S1-2,standing,1,3.71,80.000,1.000,None,0.0,1,80.000,86.095,35,31,31,29,0,
+19.73,Axis-S1-2,Axis,Gewehr 43,standing,0.0,Allies-S1-2,standing,1,2.06,80.000,1.000,None,0.0,1,80.000,5.603,35,31,35,29,1,killed
+22.80,Allies-S1-4,Allies,M1 Garand,prone,5.3,Axis-S1-3,standing,0,3.16,85.000,1.000,None,0.0,1,85.000,14.296,39,29,38,32,1,killed
+26.03,Allies-S1-4,Allies,M1 Garand,prone,2.1,Axis-S1-2,standing,1,7.48,85.000,1.000,None,0.0,1,85.000,23.619,39,29,32,29,1,injured
+27.53,Allies-S1-4,Allies,M1 Garand,prone,0.6,Axis-S1-2,prone,1,8.66,65.000,1.000,None,0.0,1,65.000,52.671,39,29,31,29,1,killed

@@ -28,6 +28,7 @@ AGridZoneActor::AGridZoneActor()
 	Border->SetupAttachment(RootComponent);
 	Border->SetStaticMesh(CubeMesh.Object);
 	Border->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Border->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 	Border->SetCastShadow(false);
 	Border->SetCanEverAffectNavigation(false);
 	Border->SetMobility(EComponentMobility::Movable);
@@ -99,6 +100,10 @@ TArray<FIntPoint> AGridZoneActor::GetCells() const
 
 void AGridZoneActor::BuildVisuals()
 {
+	if (!HasVisuals())
+	{
+		return;
+	}
 	const AGridManager* Grid = AGridManager::Find(this);
 	const float Cell = Grid ? Grid->CellSize : 100.f;
 	const float HalfX = SizeX * Cell * 0.5f - BorderInset - BorderWidth * 0.5f;
@@ -125,6 +130,10 @@ void AGridZoneActor::BuildVisuals()
 
 void AGridZoneActor::RefreshColor()
 {
+	if (!HasVisuals())
+	{
+		return;
+	}
 	const FLinearColor Color = GetZoneColor();
 	if (!BorderMaterial)
 	{

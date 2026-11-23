@@ -6,6 +6,7 @@
 
 class AGridManager;
 class USoldierData;
+class UStaticMesh;
 class UStaticMeshComponent;
 enum class EKillMethod : uint8;
 
@@ -18,6 +19,25 @@ struct FGrenadeThrow
 	/** How far (cm) the flight bulges above the straight line from Start to BouncePoint. */
 	float ArcHeight = 100.f;
 	float FlightDuration = 1.f;
+};
+
+/** What a client needs to fly a grenade the server launched: the same arc, fuse and look. */
+USTRUCT()
+struct FGrenadeNetLaunch
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FVector_NetQuantize10 Start = FVector::ZeroVector;
+	UPROPERTY() FVector_NetQuantize10 BouncePoint = FVector::ZeroVector;
+	UPROPERTY() FVector_NetQuantize10 Rest = FVector::ZeroVector;
+	UPROPERTY() float ArcHeight = 100.f;
+	UPROPERTY() float FlightDuration = 1.f;
+	UPROPERTY() float Fuse = 0.5f;
+	UPROPERTY() float KillRadius = 1.f;
+	UPROPERTY() float StunRadius = 5.f;
+	UPROPERTY() TObjectPtr<UStaticMesh> BodyMesh;
+	/** Bumped by Launch; 0 = not launched yet. */
+	UPROPERTY() uint8 Serial = 0;
 };
 
 /**
@@ -75,8 +95,22 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Grenade")
 	TObjectPtr<UStaticMeshComponent> StunRing;
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 private:
 	enum class EPhase : uint8 { Idle, Flight, Bounce, Fuse, Exploding };
+
+	/** Server: set by Launch. Clients fly their own copy from it; only the server's blast does anything. */
+	UPROPERTY(ReplicatedUsing = OnRep_NetLaunch)
+	FGrenadeNetLaunch NetLaunch;
+
+	UFUNCTION()
+	void OnRep_NetLaunch();
+
+	/** Start the flight from NetLaunch (server and clients). */
+	void BeginFlight();
+
+	bool bFinished = false;
 
 	void Explode();
 

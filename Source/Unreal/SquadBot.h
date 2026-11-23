@@ -33,6 +33,9 @@ class AVictoryPoint;
  * when pinned in the open with poor shots, throw grenades at noticed enemies when shots are poor or enemies
  * bunch up (never near a squad-mate), and run from grenades they notice landing near them.
  *
+ * With several squads per team (squad.SquadsPerTeam) each squad has its own bot. Bots of one team see each
+ * other's VP assignments and slots (as teammates would) to spread out and not grenade each other.
+ *
  * The game mode spawns one for each squad no player commands (console: squad.Bot 0 / 1, squad.BotDebug 1).
  */
 UCLASS(NotPlaceable)
@@ -48,6 +51,17 @@ public:
 	/** Team this bot commands. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot")
 	ESquadTeam Team = ESquadTeam::Axis;
+
+	/** Squad of Team this bot commands (ASoldier::SquadId). A team with several squads has one bot per squad. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot", meta = (ClampMin = "0"))
+	int32 SquadId = 0;
+
+	/**
+	 * With several squads on a team: each soldier of another friendly squad already heading for a VP makes that
+	 * VP look this many metres further away, so squads spread over the VPs instead of all taking the nearest.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot", meta = (ClampMin = "0"))
+	float FriendlySquadSpreadPenalty = 6.f;
 
 	// ---------------------------------------------------------------- Simulated player
 
@@ -153,8 +167,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot", meta = (ClampMin = "0"))
 	float ThreatRadius = 15.f;
 
-	/** The bot commanding Team in this world, if any. */
-	static ASquadBot* FindForTeam(const UObject* WorldContextObject, ESquadTeam Team);
+	/** The bot commanding that squad of Team in this world, if any. */
+	static ASquadBot* FindForSquad(const UObject* WorldContextObject, ESquadTeam Team, int32 SquadId);
 
 protected:
 	virtual void BeginPlay() override;
@@ -244,7 +258,11 @@ private:
 
 	bool IsSlotTaken(FIntPoint Cell, const ASoldier* Except) const;
 	int32 CountKnownEnemiesNear(FVector Location, float RadiusMetres) const;
-	bool IsSquadMateNear(FVector Location, float RadiusMetres) const;
+	/** Any living friendly soldier (any squad of the team) at, or heading for, a spot within RadiusMetres. */
+	bool IsFriendlyNear(FVector Location, float RadiusMetres) const;
+
+	/** Soldiers of the team's other bot squads assigned to VP. */
+	int32 CountOtherSquadsAssigned(const AVictoryPoint* VP) const;
 
 	float Now() const;
 

@@ -1,7 +1,15 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.46 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.50 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.50):** Low-poly explosions (§2.1, §7.1, §7.2, cosmetic only). Grenades and C4 now go off with a flat-shaded explosion instead of an orange ball: a white flash with streaks, an orange fireball that burns down to soot, grey-brown smoke rising for about 4 s, dirt clods thrown up, low dust puffs rolling out along the ground to about the stun radius (in place of the old orange stun disc), and a scorch mark that fades after about 14 s. C4's is about 1.4 times larger. Each client draws its own; the dedicated server draws none. Blast rules and radii are unchanged.
+
+> **Changelog (v0.49):** Low-poly floor art (§2.1, cosmetic only). The ground, roads, ponds and building floors now use procedural world-space materials instead of flat colours: faceted olive grass with lighter and dry patches, gravelly dirt roads, faceted water with a gentle shimmer, floorboards inside intact buildings and flagstone inside ruined frames. The 1 m grid lines stay on every surface. Floors are drawn only: grid cells, cover and movement are unchanged.
+
+> **Changelog (v0.48):** Several squads per team (§4.1, §4.3, §11.1, §11.2; implementation of existing rules, no new numbers). A team can now hold more than one squad, one per player: a joining player takes the first squad of their team that no other player commands, and a player leaving hands only their own squad back to a bot. The squad cohesion limit (§4.3) holds each squad together, not the whole team. Every squad no player commands gets its own bot; a team's bots see each other's VP assignments and spread over the VPs, and won't grenade any friendly soldier. For testing, `squad.SquadsPerTeam` copies the level's squad into each deployment zone (Farmstead was built for 1 squad a side, §10.1). New AI test matches (§11.2) record every shot, hit, grenade blast, medkit, capture and stress level to files for balancing.
+
+> **Changelog (v0.47):** Networked play (§11.1, §14.1; implementation, no rule changes). Soldiers, grenades and loot piles are now simulated only on the dedicated server and replicated to every client; every order a player gives (move, stop, face, attack, stance, hold fire, grenade, drag, medkit, loot) is sent to the server, which checks the soldier is that player's before running it. Until matchmaking assigns teams (§12, §14.2), each player who joins goes to the team with fewer players (Allies on a tie). A dedicated server waits for its first player before the match starts and bots take empty teams (`squad.MinPlayers`, default 1); a player joining a bot-run team takes that squad over, and a team every player has left goes back to a bot. Development and tests now run as a dedicated server with networked clients. The debug menu's Restart (§13) restarts the match on the server, so every client restarts with it.
 
 > **Changelog (v0.46):** Cover props (§9.5, _provisional_). Wells, water troughs, crate stacks, barrels, woodpiles, sandbags, hay carts and abandoned vehicles can be placed as cover. Each uses an existing cover type: a truck or tank wreck is full cover that blocks sight like a wall, a car and the small props are low walls, a hay cart is hay. Multi-cell props are solid blocks, so grenades can't drop between their cells.
 
@@ -138,6 +146,8 @@ These are recommended mappings of design systems onto Unreal's framework; they g
 | **Grenades**                    | Server-simulated ballistic arc on grid; clients receive replicated projectile for visuals.                        |
 | **Soldier models / animation**  | `USkeletalMeshComponent` on the soldier pawn with a native `USoldierAnimInstance` that picks and cross-fades clips from replicated state (cosmetic only, not ticked on a dedicated server). Models, props and clips live in `USoldierVisualData` (`DA_SoldierVisuals`); rifle models on `UWeaponData`. Clips are hand-keyed by `SourceArt/Characters/Tools/build_soldier_anims.py`. |
 | **Cover / environment art**     | Low-poly static meshes built by `SourceArt/Environment/build_ww2_cover.py` (Blender) and imported to `/Game/Environment` by `import_cover_unreal.py`. Pivot at ground level in the centre of the footprint; one cell = 1 m; `UCX_` boxes for collision. `ACoverActor` draws each cell with an instanced mesh picked per cell from the per-type variant lists (`Cover|Visuals`). Cosmetic only. |
+| **Floor / ground art**         | One procedural master material (`/Game/Materials/Floors/M_Floor_Master`, built by `Scripts/Materials/build_floor_materials.py`) draws grass, dirt, floorboards, flagstone or water in world space (metres, no UVs or textures) with low-poly flat-shaded facets and the 1 m grid lines; `MI_Floor_*` instances hold the colours. The ground is the `AGridManager` ground material; roads, ponds and building floors are no-collision planes placed by the map build script. Cosmetic only. |
+| **Explosion effects**          | `AExplosionFX`, a local, non-replicated actor spawned by each client when a grenade or C4 goes off (never on a dedicated server). It is built from flat-shaded pieces made by `SourceArt/Effects/build_explosion_fx.py` (Blender) and imported to `/Game/Effects` by `import_explosion_fx_unreal.py`. One masked material, `M_FX_Master`, reads colour, glow and dithered fade from custom primitive data, so no material instances are needed. The meshes and material are referenced from `USoldierVisualData` (Effects). Debug: `squad.TestExplosion`, `squad.ExplosionFXFreeze`. Cosmetic only. |
 | **Combat audio**                | Cosmetic `PlaySoundAtLocation` where the shot, reload or blast is shown, with a shared `USoundAttenuation`. Rifle sounds on `UWeaponData`; explosion on `USoldierVisualData`. Source files in `SourceArt/Audio`, imported to `/Game/Audio`. |
 
 ## 3. Lobby & Social System
@@ -193,6 +203,8 @@ A unit customisation panel is reserved in the lobby UI for future development. T
 
 Each player controls exactly one squad per match. Squads are the core tactical unit of the game. A squad is composed of individual soldiers, each with independent stats, stress levels, and inventory. Players issue orders to individual soldiers or to the whole squad simultaneously.
 
+In a match with several players per team (e.g. 4v4), each team has one squad per player. A player commands only their own squad; other friendly squads are teammates (shown as friendly, never ordered). A joining player gets the first squad of their team that no other player commands; a squad with no player is run by a bot (§11.1).
+
 ### 4.2 Standard Squad
 
 | Standard Squad Composition |                                        |
@@ -215,7 +227,7 @@ A squad must stay together: its two furthest-apart living soldiers may never be 
 
 - **Measured** in a straight line between cell centres (30 cells = 3000 uu), not along the walking route.
 - **Judged on destinations.** Each soldier counts at the cell it is heading for (its current cell when standing still), so a move is checked when it is ordered. A path that detours round a wall may briefly take a soldier further away mid-route; that is allowed. _Provisional._
-- **Who counts:** every living soldier in the squad, including Stunned and Injured soldiers (who can't walk far, so they anchor the squad until dragged) and dragged soldiers, who count wherever their dragger is heading. Dead soldiers don't count. A dragger is never held back by the soldier it is dragging.
+- **Who counts:** every living soldier in the squad (only that squad: other friendly squads don't count), including Stunned and Injured soldiers (who can't walk far, so they anchor the squad until dragged) and dragged soldiers, who count wherever their dragger is heading. Dead soldiers don't count. A dragger is never held back by the soldier it is dragging.
 - **Too far:** a move order whose destination would break the limit is not refused outright. The soldier goes to the reachable free cell nearest the clicked cell that keeps it within 30 m of every squad-mate, and shows **SQUAD LIMIT**. If it is already as close as it can get, the order is refused with the same message. _Provisional (could instead refuse the whole order)._
 - **Already beyond the limit** (e.g. after a fallback cell in a group move): a soldier may still move as long as the move doesn't take it further from the squad-mate it is too far from, so it can always close up again.
 - **Group moves** (§13) keep their formation. If the formation would end up too far from selected-but-unable or unselected soldiers left behind, the whole group stops at the nearest point the limit allows (the anchor soldier shows **SQUAD LIMIT**).
@@ -569,6 +581,8 @@ All three VPs lie on the map's centre line, so each is the same distance from bo
 
 For testing without a second player, a squad no player commands is given to a server-side AI bot (`ASquadBot`). It gives its soldiers only orders a player could give (move, stop, face, grenade), so it follows every rule (own line of sight to shoot, grenade arcs, stress, reloads, wind-ups). Its soldiers fire on their own (§5.3) exactly like the player's.
 
+In a networked game (§14.1) the bots start once the first player has joined. A player who joins a team a bot is running takes the squad over at once, and a team every player has left goes back to a bot.
+
 **Plays like a person, not a script:**
 - **Simulated camera.** The bot sees through a camera with the same angle, field of view and zoom limits as the player's (it plays at a fairly wide zoom). It looks at one area at a time, pans at the player's pan speed, and moves its attention between its soldiers every few seconds (fighting soldiers first). A soldier coming under fire or getting hit off screen draws the camera there after a short delay, as a flashing squad card would.
 - **Noticing enemies.** An enemy is noticed only when the bot's team spots it (§9.3), it is on the bot's screen, and no wall or tree hides it from the camera. Noticing takes a reaction delay (about 0.5–1 s) plus extra time for a prone enemy, an enemy in cover, or one near the edge of the screen. The bot remembers noticed enemies at their last seen cell for about 10 s after losing them.
@@ -579,6 +593,21 @@ For testing without a second player, a squad no player commands is given to a se
 **Plan:** one soldier per VP (unowned VPs first), spare soldiers reinforce the most threatened VP. Because of the squad cohesion limit (§4.3) it only spreads over VPs that fit inside 30 m together (and near any injured squad-mates); since an empty VP keeps its owner, it takes the rest in turn. On Farmstead, A and C are too far apart, so it holds A+B or B+C. Soldiers pick cells in their VP with cover facing where the enemy is believed to be, spaced apart. They throw grenades at recently seen enemies when shots are poor or enemies bunch up (never near a squad-mate), and fall back to nearby cover when pinned in the open with poor shots. When a squad-mate is injured, the bot notices after 1–2.5 s and sends the closest soldier with a medkit within 12 m that isn't under fire to treat it (§5.2), stops the injured soldier crawling so the medic can reach it, and leaves the medic alone until it finishes (a grenade landing nearby still makes it dodge).
 
 All bot tuning (zoom, reaction times, order gap, contact rules) is on the `ASquadBot` actor. Console: `squad.Bot 0` stops the bot, `squad.BotDebug 1` draws its screen (yellow) and the enemies it is noticing (orange) or knows about (red), `squad.VPWinTime <seconds>` shortens the VP timer for testing.
+
+**Several squads per team:** each squad no player commands has its own bot. A team's bots act like teammates who can see each other: each VP looks `FriendlySquadSpreadPenalty` (6 m) further away for every soldier another friendly squad has already sent there, so the squads spread over the VPs; a bot never throws a grenade near any friendly soldier and doesn't pick a cell another friendly squad holds or is heading for.
+
+### 11.2 AI Test Matches (balancing)
+
+Bot-only matches on a dedicated server with no clients, recorded for balancing. `Scripts/AIMatchBatch.ps1` runs a batch (one server process per match, on a fixed 30 Hz step as fast as the CPU allows, about a minute for ten 4v4 matches); `Scripts/Tests/analyze_match_stats.py` turns the records into tables. Results and reviews go in `Docs/Balancing/`.
+
+- `squad.SquadsPerTeam <n>` — squads per team; extra squads are copies of the level's squad placed in the team's deployment zone. Set before the map loads.
+- `squad.MinPlayers 0` — a dedicated server starts at once with bots only.
+- `squad.MatchSeed <n>` — seeds the bots and every soldier's hit rolls (0: random). Runs with the same seed are close but not identical.
+- `squad.MatchStats 1` — the server writes `Saved/MatchStats/<time>_seed<n>.json` (result, per-soldier and per-team totals, events) and `_shots.csv` (every shot: positions, range, stance, cover, hit chance, roll, result).
+- `squad.MatchTimeLimit <s>` ends the record as a timeout; `squad.QuitAfterMatch 1` closes the server after writing it.
+- `squad.SwapSides 1` — each faction starts in the other's deployment zone with its own rifles (tells a map-side bias from a faction bias).
+
+The bots decide these matches, so the numbers show how the rules play under bot tactics, not under skilled players.
 
 ## 12. Game Modes, Ranking & Matchmaking
 
@@ -742,6 +771,8 @@ Because the game relies on deterministic grid movement, true RNG shot calculatio
 
 - The game runs strictly on headless **Unreal Engine dedicated servers** (a `Server` build target, Linux, built from the engine source). The server is the ultimate authority for line of sight, stress, and hit-chance RNG; clients only send orders (Server RPCs) and render replicated state.
 - **Google Kubernetes Engine (GKE):** Servers are containerised and deployed globally.
+- **Replication (implemented):** the server simulates every soldier and replicates what clients need to show it (position, stance, health, stress, ammo, timers, orders in progress); clients only animate and render. Orders and loot actions go to the server as RPCs and run only after it checks the soldier belongs to the sender. Grenades are launched on the server; clients fly a copy of the same arc, and only the server's blast does damage. Line of sight decides what each client draws (§9.3).
+- **Local testing:** development runs the same way on one PC: Play-in-Editor as a dedicated server with networked clients, or `Scripts/LocalMultiplayer.ps1` for separate server and client processes (see `CLAUDE.md`).
 - **Agones:** This open-source game server orchestrator (via its Unreal Engine SDK plugin) manages game server lifecycles, spinning up dedicated 5v5 or 10v10 instances exactly when matchmaking completes, and shutting them down when the match concludes.
 
 ### 14.2 Matchmaking (Open Match)

@@ -34,6 +34,7 @@ namespace
 		Set->SetStaticMesh(Mesh);
 		// Cosmetic only: never blocks movement, shots, the cursor or the camera (GDD §9.4: rubble never affects play).
 		Set->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Set->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Set->SetCanEverAffectNavigation(false);
 		Set->SetMobility(EComponentMobility::Movable);
 		return Set;

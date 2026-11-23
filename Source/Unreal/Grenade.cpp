@@ -1,14 +1,19 @@
 #include "Grenade.h"
 
+#include "ExplosionFX.h"
 #include "GridManager.h"
 #include "Soldier.h"
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
+#include "SquadMatchStats.h"
 #include "Algo/AllOf.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Net/UnrealNetwork.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogSquadGrenade, Log, All);
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -33,6 +38,7 @@ namespace
 		Part->SetStaticMesh(Mesh);
 		Part->SetMaterial(0, Material);
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->AlwaysLoadOnServer = true; // A dedicated server skips loading no-collision components otherwise (null on the server).
 		Part->SetCanEverAffectNavigation(false);
 		Part->SetCastShadow(false);
 		return Part;
@@ -56,6 +62,11 @@ namespace
 AGrenade::AGrenade()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	// The server owns the blast; clients fly a copy from NetLaunch so everyone sees the throw.
+	bReplicates = true;
+	bAlwaysRelevant = true;
+	SetReplicatingMovement(false);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
@@ -115,20 +126,58 @@ bool AGrenade::PlanThrow(const AGridManager& Grid, const FVector& From, const FV
 
 void AGrenade::Launch(const FGrenadeThrow& Throw, const USoldierData& Data)
 {
-	KillRadius = Data.GrenadeKillRadius;
 	KillChance = Data.GrenadeKillChance;
 	CloseStunDuration = Data.GrenadeCloseStunDuration;
-	StunRadius = Data.GrenadeStunRadius;
 	StunDuration = Data.GrenadeStunDuration;
-	Fuse = Data.GrenadeFuseAfterBounce;
 
-	Start = Throw.Start;
-	BouncePoint = Throw.BouncePoint;
-	Rest = Throw.Rest;
-	FlightDuration = Throw.FlightDuration;
-	FlightArc = Throw.ArcHeight;
+	NetLaunch.Start = Throw.Start;
+	NetLaunch.BouncePoint = Throw.BouncePoint;
+	NetLaunch.Rest = Throw.Rest;
+	NetLaunch.FlightDuration = Throw.FlightDuration;
+	NetLaunch.ArcHeight = Throw.ArcHeight;
+	NetLaunch.Fuse = Data.GrenadeFuseAfterBounce;
+	NetLaunch.KillRadius = Data.GrenadeKillRadius;
+	NetLaunch.StunRadius = Data.GrenadeStunRadius;
+	++NetLaunch.Serial;
+	BeginFlight();
+}
 
-	SetPartColor(Body, this, FLinearColor(0.12f, 0.16f, 0.08f));
+void AGrenade::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AGrenade, NetLaunch);
+}
+
+void AGrenade::OnRep_NetLaunch()
+{
+	if (NetLaunch.BodyMesh)
+	{
+		SetBodyMesh(NetLaunch.BodyMesh);
+	}
+	if (NetLaunch.Serial != 0 && Phase == EPhase::Idle)
+	{
+		BeginFlight();
+	}
+}
+
+void AGrenade::BeginFlight()
+{
+	UE_LOG(LogSquadGrenade, Log, TEXT("Grenade %s in flight on the %s: (%.0f,%.0f) -> (%.0f,%.0f)."), *GetName(),
+		GetNetMode() == NM_DedicatedServer ? TEXT("server") : GetNetMode() == NM_Client ? TEXT("client") : TEXT("local game"),
+		NetLaunch.Start.X, NetLaunch.Start.Y, NetLaunch.Rest.X, NetLaunch.Rest.Y);
+	KillRadius = NetLaunch.KillRadius;
+	StunRadius = NetLaunch.StunRadius;
+	Fuse = NetLaunch.Fuse;
+	Start = NetLaunch.Start;
+	BouncePoint = NetLaunch.BouncePoint;
+	Rest = NetLaunch.Rest;
+	FlightDuration = NetLaunch.FlightDuration;
+	FlightArc = NetLaunch.ArcHeight;
+
+	if (!NetLaunch.BodyMesh)
+	{
+		SetPartColor(Body, this, FLinearColor(0.12f, 0.16f, 0.08f));
+	}
 	SetPartColor(Blast, this, FLinearColor(1.f, 0.45f, 0.05f));
 	SetPartColor(StunRing, this, FLinearColor(0.6f, 0.25f, 0.05f));
 
@@ -142,6 +191,10 @@ void AGrenade::SetBodyMesh(UStaticMesh* Mesh)
 	if (!Mesh || !Body)
 	{
 		return;
+	}
+	if (HasAuthority())
+	{
+		NetLaunch.BodyMesh = Mesh; // Clients show the same model.
 	}
 	Body->SetStaticMesh(Mesh);
 	Body->EmptyOverrideMaterials(); // Drop the placeholder tint: the model has its own materials.
@@ -193,9 +246,16 @@ void AGrenade::Tick(float DeltaSeconds)
 		// Fireball grows to the kill radius then shrinks away.
 		const float FireballDiameter = KillRadius * 2.f * FMath::Sin(Alpha * PI);
 		Blast->SetRelativeScale3D(FVector(FMath::Max(FireballDiameter, 0.01f)));
-		if (Alpha >= 1.f)
+		if (Alpha >= 1.f && !bFinished)
 		{
-			Destroy();
+			bFinished = true;
+			Blast->SetVisibility(false);
+			StunRing->SetVisibility(false);
+			if (HasAuthority())
+			{
+				// Linger hidden a moment so clients, a little behind, can finish their own explosion first.
+				SetLifeSpan(GetNetMode() == NM_Standalone ? 0.01f : 1.f);
+			}
 		}
 		break;
 	}
@@ -209,11 +269,16 @@ void AGrenade::Explode()
 	Phase = EPhase::Exploding;
 	PhaseTime = 0.f;
 	Body->SetVisibility(false);
-	Blast->SetVisibility(true);
-	StunRing->SetVisibility(true);
-	// Cylinder mesh is 100 cm across: scale = diameter in metres.
-	StunRing->SetRelativeLocation(FVector(0.f, 0.f, -GrenadeRestHeight + 1.f));
-	StunRing->SetRelativeScale3D(FVector(StunRadius * 2.f, StunRadius * 2.f, 0.01f));
+	// Cosmetic, local to each machine (none on a dedicated server). Its ground dust rolls out to the stun radius.
+	if (!AExplosionFX::SpawnAt(GetWorld(), Rest - FVector(0.f, 0.f, GrenadeRestHeight), 1.f, StunRadius))
+	{
+		// Placeholder when the effect assets are missing: orange ball and stun disc.
+		Blast->SetVisibility(GetNetMode() != NM_DedicatedServer);
+		StunRing->SetVisibility(GetNetMode() != NM_DedicatedServer);
+		// Cylinder mesh is 100 cm across: scale = diameter in metres.
+		StunRing->SetRelativeLocation(FVector(0.f, 0.f, -GrenadeRestHeight + 1.f));
+		StunRing->SetRelativeScale3D(FVector(StunRadius * 2.f, StunRadius * 2.f, 0.01f));
+	}
 	if (const USoldierVisualData* Visuals = USoldierVisualData::GetDefaultVisuals())
 	{
 		Visuals->PlayCombatSound(this, Visuals->ExplosionSound, Rest);
@@ -237,6 +302,7 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 		return;
 	}
 	const AGridManager* Grid = bCoverShields ? AGridManager::Find(World) : nullptr;
+	USquadMatchStats* Stats = USquadMatchStats::Get(World);
 	FIntPoint BlastCell = FIntPoint::ZeroValue;
 	const bool bShieldable = Grid && Grid->WorldToCell(Origin, BlastCell);
 
@@ -271,6 +337,7 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 				continue;
 			}
 		}
+		const TCHAR* Effect = nullptr;
 		if (Metres <= InKillRadius)
 		{
 			if (FMath::FRand() < InKillChance)
@@ -280,15 +347,22 @@ void AGrenade::ApplyBlast(UWorld* World, const FVector& Origin, float InKillRadi
 				Cause.Method = Method;
 				Cause.ChancePercent = InKillChance * 100.f;
 				Soldier->Die(Cause);
+				Effect = TEXT("killed");
 			}
 			else
 			{
 				Soldier->ApplyStun(InCloseStunDuration);
+				Effect = TEXT("stunned_close");
 			}
 		}
 		else if (Metres <= InStunRadius)
 		{
 			Soldier->ApplyStun(InStunDuration);
+			Effect = TEXT("stunned");
+		}
+		if (Stats && Effect)
+		{
+			Stats->RecordBlastVictim(Instigator, Method, *Soldier, Effect);
 		}
 	}
 }

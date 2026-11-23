@@ -21,8 +21,10 @@ class UNREAL_API ALootPile : public AActor
 public:
 	ALootPile();
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Loot")
+	UPROPERTY(ReplicatedUsing = OnRep_Contents, VisibleAnywhere, BlueprintReadOnly, Category = "Loot")
 	FLootInventory Contents;
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UFUNCTION(BlueprintPure, Category = "Loot")
 	FIntPoint GetCell() const { return Cell; }
@@ -34,6 +36,11 @@ public:
 	void OnContentsChanged();
 
 protected:
+	virtual void BeginPlay() override;
+
+	UFUNCTION()
+	void OnRep_Contents();
+
 	UPROPERTY(VisibleAnywhere, Category = "Loot")
 	TObjectPtr<UStaticMeshComponent> Crate;
 
@@ -41,5 +48,9 @@ protected:
 	TObjectPtr<UStaticMeshComponent> Rifle;
 
 private:
+	UPROPERTY(Replicated)
 	FIntPoint Cell = FIntPoint::ZeroValue;
+
+	/** Tint the crate and rifle (server and clients). */
+	void ApplyLook();
 };

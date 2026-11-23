@@ -1,0 +1,10 @@
+time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,hit,outcome
+13.63,Axis-S1-1,Axis,Gewehr 43,standing,0.0,Allies-S1-1,standing,1,5.71,80.000,1.000,None,0.0,1,80.000,11.324,50,34,53,29,1,injured
+15.20,Axis-S1-1,Axis,Gewehr 43,standing,0.0,Allies-S1-1,prone,1,5.23,80.000,1.000,None,0.0,1,80.000,2.107,50,34,52,29,1,killed
+15.50,Axis-S1-3,Axis,Gewehr 43,standing,0.0,Allies-S1-4,standing,1,6.07,80.000,1.000,None,0.0,1,80.000,85.584,38,34,42,30,0,
+16.00,Axis-S1-2,Axis,Gewehr 43,standing,0.0,Allies-S1-3,standing,0,4.47,80.000,1.000,None,0.0,1,80.000,88.904,35,31,31,29,0,
+16.10,Allies-S1-3,Allies,M1 Garand,standing,5.0,Axis-S1-2,standing,0,4.47,85.000,1.000,None,0.0,1,85.000,14.101,31,29,35,31,1,killed
+19.43,Allies-S1-3,Allies,M1 Garand,standing,2.6,Axis-S1-4,prone,0,4.12,85.000,1.000,None,0.0,1,85.000,28.963,37,29,38,33,1,killed
+20.00,Allies-S1-3,Allies,M1 Garand,standing,2.0,Axis-S1-1,standing,1,4.05,85.000,1.000,None,0.0,1,85.000,14.707,37,29,41,32,1,killed
+22.00,Allies-S1-3,Allies,M1 Garand,standing,0.0,Axis-S1-3,prone,0,5.10,85.000,1.000,None,0.0,1,85.000,35.391,37,29,38,34,1,injured
+23.50,Allies-S1-3,Allies,M1 Garand,standing,0.0,Axis-S1-3,prone,0,5.10,85.000,1.000,None,0.0,1,85.000,81.522,37,29,38,34,1,killed

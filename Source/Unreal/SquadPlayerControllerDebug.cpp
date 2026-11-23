@@ -289,14 +289,15 @@ void ASquadPlayerController::ExecuteDebugButton(const FDebugMenuButton& Button)
 	}
 	if (Button.bRestart)
 	{
-		ConsoleCommand(TEXT("RestartLevel"));
+		// Only the server can restart a networked match; a local game restarts the same way.
+		CallServer([this]() { ServerDebugAction(ESquadDebugAction::Restart, 0.f, FIntPoint::ZeroValue, {}); });
 		return;
 	}
 	if (const TCHAR* Name = CVarNameFor(Button.Action))
 	{
 		SetCVar(Name, Button.Param); // Also here: some are read on the client (squad.RevealAll draws enemies).
 	}
-	ServerDebugAction(Button.Action, Button.Param, FIntPoint::ZeroValue, GetSelectedSoldiers());
+	CallServer([this, Action = Button.Action, Param = Button.Param, Soldiers = GetSelectedSoldiers()]() { ServerDebugAction(Action, Param, FIntPoint::ZeroValue, Soldiers); });
 #endif
 }
 
@@ -380,7 +381,7 @@ bool ASquadPlayerController::HandleDebugMouse()
 		FIntPoint Cell;
 		if (GridManager && Selected.Num() > 0 && GetCursorWorld2D(Cursor) && GridManager->WorldToCell(FVector(Cursor, 0.f), Cell))
 		{
-			ServerDebugAction(ESquadDebugAction::Teleport, 0.f, Cell, GetSelectedSoldiers());
+			CallServer([this, Cell, Soldiers = GetSelectedSoldiers()]() { ServerDebugAction(ESquadDebugAction::Teleport, 0.f, Cell, Soldiers); });
 		}
 		return true;
 	}
@@ -400,7 +401,7 @@ bool ASquadPlayerController::HandleDebugMouse()
 	case EDebugClickTool::Kill:   Action = ESquadDebugAction::Kill; break;
 	default: break;
 	}
-	ServerDebugAction(Action, Param, Target->GetCurrentCell(), { Target });
+	CallServer([this, Action, Param, Cell = Target->GetCurrentCell(), Targets = TArray<ASoldier*>{ Target }]() { ServerDebugAction(Action, Param, Cell, Targets); });
 	return true;
 #endif
 }
@@ -461,6 +462,16 @@ void ASquadPlayerController::ServerDebugAction_Implementation(ESquadDebugAction 
 		break;
 	case ESquadDebugAction::Pause:
 		SetPause(Param > 0.5f);
+		break;
+	case ESquadDebugAction::Restart:
+		if (World->GetNetMode() == NM_Standalone)
+		{
+			ConsoleCommand(TEXT("RestartLevel"));
+		}
+		else
+		{
+			World->ServerTravel(TEXT("?Restart"), false); // Every connected client travels with the server.
+		}
 		break;
 	case ESquadDebugAction::BreachAllWalls:
 		if (GEngine)
