@@ -11,7 +11,8 @@ Layout is in grid cells: (row, col), both 0..63. Row 0 is the north edge (world 
 col 0 is the west edge (world -Y). One cell = 100 uu.
 
 Gameplay pieces use the project's cover classes (hay bales, low walls, full walls, window walls,
-trees). Roads and ponds are flat coloured planes with no collision: purely visual (no water rule yet).
+trees). Roads, ponds and building floors are flat planes with no collision: purely visual (no water rule yet).
+They use the procedural floor materials (/Game/Materials/Floors); the ground is MI_Floor_Grass on the GridManager.
 Deployment Zones and Victory Points are ADeploymentZone / AVictoryPoint actors placed per GDD §10.5;
 this script leaves them alone and starts each squad inside its own DZ.
 """
@@ -19,7 +20,7 @@ import unreal
 
 MAP_PATH = "/Game/Maps/Farmstead"
 TEMPLATE_MAP = "/Game/Maps/Main"
-MAT_DIR = "/Game/Materials/Placeholder"
+MAT_DIR = "/Game/Materials/Floors"  # built by Scripts/Materials/build_floor_materials.py
 GRID = 64
 CELL = 100.0
 HALF = (GRID - 1) / 2.0  # 31.5
@@ -131,6 +132,9 @@ ROADS = [
     (42, 18, 63, 20),    # junction -> south gate
     (24, 25, 26, 29),    # spine -> central farmhouse
     (15, 25, 17, 33),    # spine -> big farmhouse
+]
+EXTRA_FLOORS = [
+    (21, 38, 26, 44),    # B3 L-wing (FULL_WALLS) up to the main block's north wall, floorboards
 ]
 PONDS = [
     (34, 50, 37, 54), (40, 47, 42, 50), (38, 57, 41, 60),
@@ -350,14 +354,15 @@ def hay_cells(r, c, length, along):
 def load_material(name):
     mi = unreal.load_asset(f"{MAT_DIR}/{name}")
     if not mi:
-        raise RuntimeError(f"Missing {MAT_DIR}/{name} (instance of /Engine/BasicShapes/BasicShapeMaterial with a Color override)")
+        raise RuntimeError(f"Missing {MAT_DIR}/{name}: run Scripts/Materials/build_floor_materials.py first")
     return mi
 
 
 PLANE = None
 
 
-def flat(rect, mat, z, folder, label=None):
+def flat(rect, mat, z, folder, label=None, inset=0.0):
+    """Flat no-collision plane over the inclusive cell rect, shrunk by inset cells on each side."""
     r0, c0, r1, c1 = rect
     loc = unreal.Vector((HALF - (r0 + r1) / 2.0) * CELL, ((c0 + c1) / 2.0 - HALF) * CELL, z)
     a = eas.spawn_actor_from_class(unreal.StaticMeshActor, loc, unreal.Rotator(0, 0, 0))
@@ -369,7 +374,7 @@ def flat(rect, mat, z, folder, label=None):
     smc.set_material(0, mat)
     smc.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
     smc.set_editor_property("cast_shadow", False)
-    a.set_actor_scale3d(unreal.Vector(r1 - r0 + 1, c1 - c0 + 1, 1))
+    a.set_actor_scale3d(unreal.Vector(r1 - r0 + 1 - 2 * inset, c1 - c0 + 1 - 2 * inset, 1))
     a.set_folder_path(folder)
     if label:
         a.set_actor_label(label)
@@ -475,13 +480,21 @@ def build():
 
     PLANE = unreal.load_asset("/Engine/BasicShapes/Plane")
 
-    dirt = load_material("MI_Placeholder_Road")
-    water = load_material("MI_Placeholder_Water")
+    grid.set_editor_property("GroundMaterial", load_material("MI_Floor_Grass"))
+    dirt = load_material("MI_Floor_Dirt")
+    water = load_material("MI_Floor_Water")
+    floors = {"window": load_material("MI_Floor_Planks"), "frame": load_material("MI_Floor_Flagstone")}
 
     for rect in ROADS:
         flat(rect, dirt, 0.5, "Farmstead/Roads")
     for rect in PONDS:
         flat(rect, water, 0.8, "Farmstead/Ponds")
+    # Building floors: from wall centreline to wall centreline (walls run through cell centres). Intact houses get
+    # floorboards, ruined frames flagstone.
+    for i, b in enumerate(BUILDINGS):
+        flat(b["rect"], floors[b["kind"]], 0.3, "Farmstead/Floors", f"Floor_B{i + 1}", inset=0.5)
+    for rect in EXTRA_FLOORS:
+        flat(rect, floors["window"], 0.3, "Farmstead/Floors", inset=0.5)
 
     for wr in corner_extensions(wall_runs()):
         run(wr["cls"], wr["cells"], wr["horizontal"], wr["folder"], wr["props"], wr["ext_lo"], wr["ext_hi"])
