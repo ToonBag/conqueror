@@ -37,6 +37,78 @@ namespace
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarSimultaneousShots(
+		TEXT("squad.SimultaneousShots"),
+		1,
+		TEXT("1 = rolled hits take effect once every soldier has had its turn in the server tick, so two soldiers firing ")
+		TEXT("in the same tick both land their shots (GDD §5.3). 0 = a hit takes effect at once, so whichever soldier the ")
+		TEXT("server updates first can kill the other before it fires (old behaviour, for comparison)."));
+
+	/** A rolled hit waiting for the end of the server tick (squad.SimultaneousShots). */
+	struct FPendingHit
+	{
+		TWeakObjectPtr<UWorld> World;
+		TWeakObjectPtr<ASoldier> Target;
+		TWeakObjectPtr<const ASoldier> Shooter;
+		FKillCause Cause; // Killer is filled from Shooter when applied.
+		float DistanceMetres = 0.f;
+		TWeakObjectPtr<USquadMatchStats> Stats;
+		int32 StatsRow = INDEX_NONE;
+	};
+	TArray<FPendingHit> PendingHits;
+	FDelegateHandle PendingHitsHandle;
+
+	void ApplyHit(ASoldier& Target, float DistanceMetres, const FKillCause& Cause, USquadMatchStats* Stats, int32 StatsRow)
+	{
+		const bool bWasDead = Target.IsDead();
+		const bool bWasInjured = Target.IsInjured();
+		Target.ReceiveHit(DistanceMetres, Cause);
+		if (Stats)
+		{
+			const FString Outcome = bWasDead ? TEXT("none") : Target.IsDead() ? TEXT("killed")
+				: (Target.IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none");
+			if (StatsRow == INDEX_NONE)
+			{
+				Stats->RecordHitOutcome(Outcome);
+			}
+			else
+			{
+				Stats->RecordHitOutcomeAt(StatsRow, Outcome);
+			}
+		}
+	}
+
+	/** After every actor has ticked: apply this world's queued hits, in the order they were fired. */
+	void FlushPendingHits(UWorld* World, ELevelTick, float)
+	{
+		if (PendingHits.Num() == 0)
+		{
+			return;
+		}
+		TArray<FPendingHit> Due;
+		for (int32 i = 0; i < PendingHits.Num();)
+		{
+			if (!PendingHits[i].World.IsValid() || PendingHits[i].World.Get() == World)
+			{
+				Due.Add(PendingHits[i]);
+				PendingHits.RemoveAt(i);
+			}
+			else
+			{
+				++i;
+			}
+		}
+		for (const FPendingHit& Hit : Due)
+		{
+			if (ASoldier* Target = Hit.Target.Get())
+			{
+				FKillCause Cause = Hit.Cause;
+				Cause.Killer = Hit.Shooter.Get();
+				ApplyHit(*Target, Hit.DistanceMetres, Cause, Hit.Stats.Get(), Hit.StatsRow);
+			}
+		}
+	}
+
 	TAutoConsoleVariable<int32> CVarRevealAllSoldiers(
 		TEXT("squad.RevealAll"),
 		0,
@@ -2989,13 +3061,26 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Cause.Method = EKillMethod::Rifle;
 		Cause.Weapon = GetWeaponData();
 		Cause.ChancePercent = Chance.FinalChance;
-		const bool bWasDead = Target->IsDead();
-		const bool bWasInjured = Target->IsInjured();
-		Target->ReceiveHit(DistanceMetres, Cause);
-		if (Stats)
+		if (CVarSimultaneousShots.GetValueOnGameThread() != 0)
 		{
-			Stats->RecordHitOutcome(bWasDead ? TEXT("none") : Target->IsDead() ? TEXT("killed")
-				: (Target->IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none"));
+			// GDD §5.3: shots fired in the same server tick land together, whatever order the soldiers tick in.
+			if (!PendingHitsHandle.IsValid())
+			{
+				PendingHitsHandle = FWorldDelegates::OnWorldPostActorTick.AddStatic(&FlushPendingHits);
+			}
+			FPendingHit& Hit = PendingHits.AddDefaulted_GetRef();
+			Hit.World = GetWorld();
+			Hit.Target = Target;
+			Hit.Shooter = this;
+			Hit.Cause = Cause;
+			Hit.Cause.Killer = nullptr;
+			Hit.DistanceMetres = DistanceMetres;
+			Hit.Stats = Stats;
+			Hit.StatsRow = Stats ? Stats->TakePendingOutcomeRow() : INDEX_NONE;
+		}
+		else
+		{
+			ApplyHit(*Target, DistanceMetres, Cause, Stats, INDEX_NONE);
 		}
 	}
 	if (OnShotResolved.IsBound())

@@ -54,6 +54,10 @@ public:
 		const FShotTargetSnapshot* TargetBefore = nullptr);
 	/** After a rifle hit: Outcome "injured", "killed" or "none" (invulnerable / already dead). */
 	void RecordHitOutcome(const FString& Outcome);
+	/** The shot row RecordHitOutcome would fill (the last rolled shot); INDEX_NONE if none. */
+	int32 TakePendingOutcomeRow() { const int32 Row = PendingOutcomeRow; PendingOutcomeRow = INDEX_NONE; return Row; }
+	/** Fills a row taken earlier with TakePendingOutcomeRow (hits resolved at the end of the server tick). */
+	void RecordHitOutcomeAt(int32 Row, const FString& Outcome);
 	/**
 	 * Projectile model (GDD §16): one row per round when it stops. bHitTarget: it hit the soldier aimed at, and
 	 * Outcome is "injured" / "killed" / "none"; otherwise Outcome says where it went ("miss_cover",

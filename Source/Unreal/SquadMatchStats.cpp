@@ -255,6 +255,14 @@ void USquadMatchStats::RecordHitOutcome(const FString& Outcome)
 	PendingOutcomeRow = INDEX_NONE;
 }
 
+void USquadMatchStats::RecordHitOutcomeAt(int32 Row, const FString& Outcome)
+{
+	if (ShotRows.IsValidIndex(Row))
+	{
+		ShotRows[Row] += Outcome;
+	}
+}
+
 void USquadMatchStats::RecordGrenadeThrown(const ASoldier& Thrower, FIntPoint From, FIntPoint Target)
 {
 	if (bWritten)
