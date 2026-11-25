@@ -36,3 +36,7 @@ __pycache__/
 # Local tool state
 .Aura/
 .claude/settings.local.json
+
+# Packaged playtest builds (Scripts/Playtest/PackageClient.ps1)
+/Playtest/
+/Build/Windows/FileOpenOrder/

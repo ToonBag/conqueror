@@ -435,6 +435,9 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	/** The camera has been put over this player's squad (PlayerTick, once the team is known). */
+	bool bCameraOnOwnSquad = false;
+
 	/** Server RPC calls waiting for PlayerTick (CallServer). */
 	TArray<TFunction<void()>> PendingServerCalls;
 

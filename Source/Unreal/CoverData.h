@@ -32,7 +32,7 @@ enum class ECoverReductionMode : uint8
 	Multiplicative
 };
 
-/** Cover tuning (GDD §9). Class defaults match the GDD; DA_CoverTuning overrides them. */
+/** Cover tuning (GDD §9). Class defaults match the GDD; an asset assigned to AGridManager::CoverData overrides them. */
 UCLASS(BlueprintType)
 class UNREAL_API UCoverData : public UPrimaryDataAsset
 {
