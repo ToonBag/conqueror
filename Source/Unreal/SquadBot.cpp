@@ -774,9 +774,22 @@ bool ASquadBot::TryTreatSquadMate(FSoldierBrain& Brain)
 			continue;
 		}
 		const float Distance = FVector::Dist2D(S->GetActorLocation(), Patient->GetActorLocation());
-		if (Distance > MaxDistance || Distance >= BestDistance)
+		// GDD §5.1: a squad-mate close to bleeding out is worth a longer walk, if the medic can still make it.
+		const float BleedLeft = Patient->GetBleedOutRemaining();
+		const bool bUrgent = BleedLeft > 0.f && BleedLeft <= UrgentBleedOutTime;
+		const float Reach = bUrgent ? FMath::Max(MaxDistance, UrgentMedicDistance * 100.f) : MaxDistance;
+		if (Distance > Reach || Distance >= BestDistance)
 		{
 			continue;
+		}
+		if (BleedLeft > 0.f)
+		{
+			const USoldierData* Data = S->GetSoldierData();
+			const float WalkSeconds = Distance / FMath::Max(1.f, S->GetCurrentMoveSpeed());
+			if (WalkSeconds + Data->MedkitChannelTime > BleedLeft)
+			{
+				continue; // Can't arrive and finish before it bleeds out.
+			}
 		}
 		// Leave it to a closer squad-mate that could go (it gets its own turn to decide).
 		bool bCloserMedic = false;

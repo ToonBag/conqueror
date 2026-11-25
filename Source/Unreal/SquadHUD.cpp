@@ -426,7 +426,13 @@ void ASquadHUD::DrawSquadCard(const ASoldier& Soldier, float X, float Y, float W
 	switch (Health)
 	{
 	case ESoldierHealth::Stunned: Accent = Warn;   HealthText = FString::Printf(TEXT("STUNNED %.1fs"), Soldier.GetStunRemaining()); break;
-	case ESoldierHealth::Injured: Accent = Danger; HealthText = TEXT("INJURED"); break;
+	case ESoldierHealth::Injured:
+		Accent = Danger;
+		// GDD §5.1: seconds until it bleeds out ("paused" while a medic is applying a medkit).
+		HealthText = Soldier.GetBleedOutRemaining() <= 0.f ? FString(TEXT("INJURED"))
+			: Soldier.IsBleedOutPaused() ? FString::Printf(TEXT("INJURED %ds (MEDIC)"), FMath::CeilToInt(Soldier.GetBleedOutRemaining()))
+			: FString::Printf(TEXT("BLEEDING %ds"), FMath::CeilToInt(Soldier.GetBleedOutRemaining()));
+		break;
 	case ESoldierHealth::Dead:    Accent = Dim;    HealthText = TEXT("KIA"); break;
 	default: break;
 	}
@@ -748,7 +754,11 @@ void ASquadHUD::DrawKillFeed(ASquadPlayerController& PC)
 		const FString VictimRank = RankLine(E.Victim);
 		const FString Chance = ChanceLabel(E.ChancePercent);
 		const bool bGrenade = E.Method != EKillMethod::Rifle; // Grenades and C4 (GDD §7.2) share the explosive icon.
-		const FString WeaponLabel = E.Method == EKillMethod::C4 ? FString(TEXT("C4")) : bGrenade ? FString(TEXT("Grenade")) : E.WeaponName;
+		FString WeaponLabel = E.Method == EKillMethod::C4 ? FString(TEXT("C4")) : bGrenade ? FString(TEXT("Grenade")) : E.WeaponName;
+		if (E.bBledOut)
+		{
+			WeaponLabel = WeaponLabel.IsEmpty() ? FString(TEXT("Bled out")) : FString::Printf(TEXT("%s - bled out"), *WeaponLabel);
+		}
 
 		// Column widths (pixels).
 		const float KillerW = FMath::Max(Measure(KillerRank, 0.85f).X, Measure(E.Killer.Name, 1.1f).X);

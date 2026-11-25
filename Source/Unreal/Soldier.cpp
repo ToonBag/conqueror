@@ -985,8 +985,35 @@ void ASoldier::ReceiveHit(float DistanceMetres, const FKillCause& Cause)
 		return;
 	}
 	bInjured = true;
+	// GDD §5.1: an untreated injury kills after BleedOutTime; the death is credited to this hit.
+	BleedOutRemaining = GetSoldierData()->BleedOutTime;
+	InjuredBy = Cause.Killer;
+	InjuryCause = Cause;
+	InjuryCause.Killer = nullptr; // Held weakly in InjuredBy instead.
 	DamageFlashRemaining = DamageFlashTime;
 	ApplyPostureVisuals();
+}
+
+bool ASoldier::IsBleedOutPaused() const
+{
+	const ASoldier* Medic = MedkitTreatedBy.Get();
+	return Medic && Medic->IsApplyingMedkit() && Medic->MedkitPatient.Get() == this;
+}
+
+void ASoldier::UpdateBleedOut(float DeltaSeconds)
+{
+	if (!bInjured || bDead || BleedOutRemaining <= 0.f || IsBleedOutPaused())
+	{
+		return;
+	}
+	BleedOutRemaining = FMath::Max(0.f, BleedOutRemaining - DeltaSeconds);
+	if (BleedOutRemaining <= 0.f && !IsDebugInvulnerable())
+	{
+		FKillCause Cause = InjuryCause;
+		Cause.Killer = InjuredBy.Get();
+		Cause.bBledOut = true;
+		Die(Cause);
+	}
 }
 
 void ASoldier::ApplyStun(float Seconds)
@@ -1022,6 +1049,7 @@ void ASoldier::Die(const FKillCause& Cause)
 			Entry.Method = Cause.Method;
 			Entry.WeaponName = Cause.Method == EKillMethod::Rifle ? SquadLoot::WeaponName(Cause.Weapon) : FString();
 			Entry.ChancePercent = Cause.ChancePercent;
+			Entry.bBledOut = Cause.bBledOut;
 			GameState->AddKill(Entry);
 		}
 		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
@@ -1034,6 +1062,7 @@ void ASoldier::Die(const FKillCause& Cause)
 	CancelBuild();
 	bDead = true;
 	StunRemaining = 0.f;
+	BleedOutRemaining = 0.f;
 	CancelGrenadeThrow();
 	Stress = 0.f;
 	StressDecayHold = 0.f;
@@ -1247,6 +1276,12 @@ void ASoldier::Tick(float DeltaSeconds)
 		return;
 	}
 
+	UpdateBleedOut(DeltaSeconds);
+	if (bDead)
+	{
+		WriteNetState(); // Bled out this tick.
+		return;
+	}
 	UpdateDrag();
 	UpdateStress(DeltaSeconds);
 	UpdateGrenadeThrow(DeltaSeconds);
@@ -1396,6 +1431,7 @@ void ASoldier::WriteNetState()
 	S.bInjured = bInjured;
 	S.bDead = bDead;
 	S.StunRemaining = StunRemaining;
+	S.BleedOutRemaining = BleedOutRemaining;
 	S.Stress = Stress;
 	S.bSpottedByEnemy = bSpottedByEnemy;
 	S.OwningPlayer = OwningPlayer.Get();
@@ -1486,6 +1522,7 @@ void ASoldier::ReadNetState()
 	bInjured = S.bInjured;
 	bDead = S.bDead;
 	StunRemaining = S.StunRemaining;
+	BleedOutRemaining = S.BleedOutRemaining;
 	Stress = S.Stress;
 	bSpottedByEnemy = S.bSpottedByEnemy;
 	OwningPlayer = S.OwningPlayer;
@@ -2371,6 +2408,8 @@ void ASoldier::RecoverFromInjury()
 	}
 	// GDD §5.2: back to Active. A further hit from beyond 5 m injures again rather than killing.
 	bInjured = false;
+	BleedOutRemaining = 0.f;
+	InjuredBy = nullptr;
 	MedkitTreatedBy = nullptr;
 	Stance = ESoldierStance::Prone; // Still on the ground; the player picks the stance from here.
 	ApplyPostureVisuals();
@@ -3305,7 +3344,8 @@ void ASoldier::UpdateStatusLabel()
 	}
 	else if (bInjured)
 	{
-		Text = TEXT("INJURED - CRAWLING");
+		Text = BleedOutRemaining > 0.f ? FString::Printf(TEXT("INJURED - BLEEDING %ds"), FMath::CeilToInt(BleedOutRemaining))
+			: FString(TEXT("INJURED - CRAWLING"));
 		Color = FColor(255, 60, 60);
 	}
 	else

@@ -275,7 +275,7 @@ void USquadMatchStats::RecordDeath(const ASoldier& Victim, const FKillCause& Cau
 	}
 	FSoldierRecord& V = Find(Victim);
 	V.DeathTime = MatchTime();
-	V.DeathCause = MethodName(Cause.Method);
+	V.DeathCause = Cause.bBledOut ? TEXT("bled_out") : MethodName(Cause.Method);
 	FString KillerId = TEXT("none");
 	if (const ASoldier* Killer = Cause.Killer)
 	{
@@ -290,7 +290,8 @@ void USquadMatchStats::RecordDeath(const ASoldier& Victim, const FKillCause& Cau
 			}
 		}
 	}
-	Events.Add(FString::Printf(TEXT("%.1f death %s by %s (%s, %.1f%%)"), MatchTime(), *V.Id, *KillerId, MethodName(Cause.Method), Cause.ChancePercent));
+	Events.Add(FString::Printf(TEXT("%.1f death %s by %s (%s, %.1f%%)"), MatchTime(), *V.Id, *KillerId,
+		Cause.bBledOut ? TEXT("bled_out") : MethodName(Cause.Method), Cause.ChancePercent));
 }
 
 void USquadMatchStats::RecordBlastVictim(const ASoldier* Instigator, EKillMethod Method, const ASoldier& Victim, const TCHAR* Effect)

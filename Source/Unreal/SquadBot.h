@@ -163,6 +163,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Medkit", meta = (ClampMin = "0"))
 	float MaxMedicDistance = 12.f;
 
+	/**
+	 * GDD §5.1: once an injured squad-mate has this many seconds or fewer left before it bleeds out, the bot
+	 * sends medics from up to UrgentMedicDistance, if they can still get there and finish in time.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Medkit", meta = (ClampMin = "0", Units = "s"))
+	float UrgentBleedOutTime = 45.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Medkit", meta = (ClampMin = "0"))
+	float UrgentMedicDistance = 30.f;
+
 	/** Noticed enemies within this many metres of a VP make it "threatened" and draw spare soldiers. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot", meta = (ClampMin = "0"))
 	float ThreatRadius = 15.f;

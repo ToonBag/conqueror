@@ -58,6 +58,7 @@ void ASquadGameState::MulticastKill_Implementation(const FKillFeedEntry& Entry)
 	{
 		return FString::Printf(TEXT("%s%s %s"), *P.Rank, P.Regiment.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" [%s]"), *P.Regiment), *P.Name);
 	}(Entry.Killer);
-	UE_LOG(LogTemp, Log, TEXT("KILL: %s -> %s %s (%s, %.1f%%)"), *Who, *Entry.Victim.Rank, *Entry.Victim.Name,
-		Entry.Method == EKillMethod::Grenade ? TEXT("grenade") : Entry.Method == EKillMethod::C4 ? TEXT("C4") : *Entry.WeaponName, Entry.ChancePercent);
+	UE_LOG(LogTemp, Log, TEXT("KILL: %s -> %s %s (%s%s, %.1f%%)"), *Who, *Entry.Victim.Rank, *Entry.Victim.Name,
+		Entry.Method == EKillMethod::Grenade ? TEXT("grenade") : Entry.Method == EKillMethod::C4 ? TEXT("C4") : *Entry.WeaponName,
+		Entry.bBledOut ? TEXT(", bled out") : TEXT(""), Entry.ChancePercent);
 }

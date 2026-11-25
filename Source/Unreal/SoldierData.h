@@ -95,6 +95,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Medkit", meta = (ClampMin = "1"))
 	int32 MedkitReachCells = 1;
 
+	/**
+	 * GDD §5.1: an injured soldier dies (bleeds out) this many seconds after it was injured unless a medkit
+	 * treatment finishes first. The timer pauses while a medic is applying a medkit to it. 0 turns bleed-out off.
+	 * Provisional.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Medkit", meta = (ClampMin = "0", Units = "s"))
+	float BleedOutTime = 75.f;
+
 	/** A rifle hit from this distance or closer kills; further away it injures. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Damage", meta = (ClampMin = "0"))
 	float CloseRangeKillDistance = 5.f;

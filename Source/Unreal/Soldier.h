@@ -36,6 +36,8 @@ struct FKillCause
 	const UWeaponData* Weapon = nullptr;
 	/** Chance (percent) of the roll that killed: the shot's final hit chance, or the grenade kill chance. */
 	float ChancePercent = 0.f;
+	/** GDD §5.1: died of an untreated injury. Killer, method, weapon and chance are those of the injuring hit. */
+	bool bBledOut = false;
 };
 
 /** How likely a shot from one soldier at another is to hit, and why (GDD §5.3, §9). */
@@ -117,6 +119,7 @@ struct FSoldierNetState
 	UPROPERTY() bool bInjured = false;
 	UPROPERTY() bool bDead = false;
 	UPROPERTY() float StunRemaining = 0.f;
+	UPROPERTY() float BleedOutRemaining = 0.f;
 	UPROPERTY() float Stress = 0.f;
 	UPROPERTY() bool bSpottedByEnemy = false;
 	UPROPERTY() TObjectPtr<APlayerState> OwningPlayer;
@@ -778,6 +781,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
 	float GetStunRemaining() const { return StunRemaining; }
+	/** GDD §5.1: seconds until this injured soldier bleeds out (0 when not injured or bleed-out is off). */
+	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
+	float GetBleedOutRemaining() const { return BleedOutRemaining; }
+	/** True while the bleed-out timer is paused because a medic is applying a medkit to this soldier. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
+	bool IsBleedOutPaused() const;
+	/** Walking speed in its current posture (cm/s). */
+	float GetCurrentMoveSpeed() const;
 
 	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
 	bool IsReloading() const { return bReloading; }
@@ -998,7 +1009,6 @@ private:
 	void FaceCamera(UTextRenderComponent* Label) const;
 	/** False on a dedicated server, which doesn't load the (cosmetic) text labels: text has no font there. */
 	bool HasLabels() const { return NumberLabel && StatusLabel && HoldFireLabel && MoveMarkerLabel; }
-	float GetCurrentMoveSpeed() const;
 	void FollowDragger(FIntPoint Cell);
 	void UpdateDrag();
 
@@ -1056,6 +1066,14 @@ private:
 	ESoldierStance Stance = ESoldierStance::Standing;
 	bool bInjured = false;
 	bool bDead = false;
+
+	/** GDD §5.1: seconds left before an untreated injury kills (replicated for the HUD). */
+	float BleedOutRemaining = 0.f;
+	/** Server: the hit that injured this soldier, credited if it bleeds out. */
+	TWeakObjectPtr<const ASoldier> InjuredBy;
+	FKillCause InjuryCause;
+	/** Server: counts the bleed-out timer down and kills the soldier when it runs out. */
+	void UpdateBleedOut(float DeltaSeconds);
 
 	TWeakObjectPtr<APlayerState> OwningPlayer;
 	float StunRemaining = 0.f;
