@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.54 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.55 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.55):** Farmstead made fair (§10.5). Bot test matches showed the old layout favoured the south start side: it won 31 of 33 decided 4v4 matches, whichever faction started there. The north half of the map is now a mirror image of the south half, across the line between rows 31 and 32, so both sides meet the same ground. VP B is now a walled yard (window walls with a doorway on each side) instead of the farmhouse's south doorway, and VP C's walled room has a doorway and windows on both its south and north sides. The barn's north rooms, the farmhouse and the north ponds are gone. The two weakened walls, both in the north half before, are replaced by four in mirrored pairs, one beside each doorway of the B yard and the C room. Deployment zones, VPs and squads are unchanged. In 80 bot matches with sides swapped half the time, the south side won 42 and the north 36 (2 timeouts). With the side bias gone, the Allies won 48 to 30: the M1 Garand (faster aim and fire, §6) wins open first-shot duels, an open faction-balance question. Built by `Scripts/Maps/mirror_farmstead.py`, which replaces `build_farmstead.py` as the record of the layout. Review: `Docs/Balancing/2026-11-25_map_bias/`.
 
 > **Changelog (v0.54):** Bleed-out (§5.1, §5.2, §11, §11.1, §13; _provisional_). An Injured soldier now dies **75 s** after it was injured unless a medkit treatment finishes first. The timer pauses while a medic is applying a medkit to it; dragging doesn't pause it. A treated soldier that is injured again starts a fresh 75 s. The death is credited to whoever fired the injuring shot, and the kill feed shows that shot's rifle and chance with "bled out". The squad bar shows **BLEEDING Ns** (**INJURED Ns (MEDIC)** while being treated) and the soldier's status line **INJURED - BLEEDING Ns**. This closes the gap where a match could never end with only injured soldiers left (§11): bot test matches timed out in 6-11 of 40. The play-test bot sends a medic from up to 30 m (was 12 m) once a squad-mate has 45 s or less left, if the medic can get there and finish in time. Tuning: `BleedOutTime` in the soldier data asset (0 turns it off); `UrgentBleedOutTime` / `UrgentMedicDistance` on the bot.
 
@@ -563,19 +565,21 @@ Each team has one Deployment Zone (DZ): an **8x8-cell** block at its own edge of
 | Zone | Cells (X, Y) | Size | Notes |
 | ---- | ------------ | ---- | ----- |
 | Allied DZ | 34–41, 1–8 | 8x8 | South edge, just inside the boundary wall. |
-| Axis DZ | 34–41, 55–62 | 8x8 | North edge, mirroring the Allied DZ (clear of the ponds at the north centre). |
+| Axis DZ | 34–41, 55–62 | 8x8 | North edge, mirroring the Allied DZ. |
 | VP A — Orchard | 9–14, 29–34 | 6x6 | Among the orchard trees, west. |
-| VP B — Farmhouse | 30–35, 29–34 | 6x6 | Across the farmhouse's south doorway, centre. |
-| VP C — Barn | 50–55, 29–34 | 6x6 | Inside the east building's walled room, east. |
+| VP B — Farmyard | 30–35, 29–34 | 6x6 | A walled yard, centre: window walls on rows 30 and 33 with a 3-cell doorway (32–34) in each, and window walls along columns 29 and 37. |
+| VP C — Barn | 50–55, 29–34 | 6x6 | Inside a walled room, east: walls on rows 28 and 35, each with a doorway at 53–54 and windows, and window walls along columns 49 and 57. |
 
 All three VPs lie on the map's centre line, so each is the same distance from both DZs (in a straight line, centre to centre: A ≈ 37.5 m, B ≈ 27.5 m, C ≈ 31 m).
+
+**Symmetry.** The map is mirrored across the line between rows 31 and 32: the cover on cell (X, Y) is the same as on (X, 63 − Y), so neither side's approach is easier. Keep it that way when editing the level (`Scripts/Maps/mirror_farmstead.py` rebuilds the north half from the south half).
 
 **Weakened walls (§9.4)** — _provisional placement:_
 
 | Wall | Cells (X, Y) | Breach opens |
 | ---- | ------------ | ------------ |
-| Barn partition | 54–56, 35 | A second way from the barn's north room straight into VP C's walled room (otherwise only through the doorway at 52–53). |
-| Farmhouse partition | 31–33, 37 | The farmhouse's interior wall just north of VP B, letting attackers in the north rooms flank VP B. |
+| B yard, south / north | 36, 30 and 36, 33 | A second way into the B yard beside its doorway, from that side. |
+| C room, south / north | 56, 28 and 56, 35 | A second way into VP C's walled room beside its doorway (53–54), from that side. |
 
 ## 11. Victory Conditions
 
