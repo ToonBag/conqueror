@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.56 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.57 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.57):** Gewehr 43 aim time **0.45 s → 0.40 s** (§6), the same as the M1 Garand. Bot test matches showed the 0.05 s gap decided most open-ground duels: soldiers that stop at the same moment open fire about together, and the first hit usually wins. On an empty test map the Allies won 67-13; with equal aim times 48-32. The other trade-offs (Garand: faster fire, better short range; Gewehr 43: better mid and long range, 10-round magazine, faster reload) are unchanged. On Farmstead: Allies 43, Axis 36; south 38, north 41 (80 matches, sides swapped half the time). Review: `Docs/Balancing/2026-11-25_faction_balance/`.
 
 > **Changelog (v0.56):** Simultaneous shots (§5.3; implementation, no new numbers). Shots fired in the same server tick now land together: a soldier killed by a shot in that tick still fires its own. Before, the server updated soldiers one after another, so whichever it updated first (the Allies, placed in the level first) could kill the other before it fired. In bot test matches that alone gave the Allies about 60% of wins with identical rifles on an empty map; with this change it is about even. `squad.SimultaneousShots 0` brings back the old order for comparison. Finding, not a rule change: the rifles still give the Allies an edge on open ground, mostly from the Garand's shorter aim time (§6). Review: `Docs/Balancing/2026-11-25_faction_balance/`.
 
@@ -318,7 +320,7 @@ _The M1 Garand and Gewehr 43 are designed to be broadly similar in performance, 
 | **Mid Range Acc.**    | 65%                     | 68%                        |
 | **Long Range Acc.**   | 35%                     | 42%                        |
 | **Short Range Supp.** | 60                      | 55                         |
-| **Aim Time**          | 0.4 seconds             | 0.45 seconds               |
+| **Aim Time**          | 0.4 seconds             | 0.4 seconds                |
 | **Reload Time**       | 2.5 seconds (base)      | 2.2 seconds (base)         |
 
 ### 6.1 Machine Guns

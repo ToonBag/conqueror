@@ -48,7 +48,20 @@ stat? The Gewehr 43 given one Garand value at a time, empty map (`x_*`, 80 match
 - The edge depends on the "whoever stops and shoots first wins" tempo (2026-11-23 review, finding 2). Bots
   fight in the open far more than players would.
 
-## Options (design decision, not made)
+## Decision: equal aim times (GDD v0.57)
+
+The Gewehr 43's aim time is now 0.40 s, like the Garand's (option 1 below, matching the faster rifle so fights
+don't slow down). Farmstead, 40 + 40 matches, seeds 5000+ (`aimF*`):
+
+| | Allies-Axis | South-North | Timeouts |
+|---|---|---|---|
+| Before (`simF*`) | 44-34 | 41-37 | 2 |
+| Equal aim times (`aimF*`) | 43-36 | 38-41 | 1 |
+
+On Farmstead the change is within noise (it was already close); on open ground it cuts the edge from 67-13 to
+48-32 (`x_aim*`). The rest of the open-ground edge comes from the Garand's short-range accuracy and fire rate.
+
+## Options considered
 
 1. **Same aim time for both rifles** (e.g. both 0.4 s or both 0.425 s). Biggest effect; keeps the other trade-offs.
 2. **Narrow short-range accuracy** (e.g. Garand 83 / G43 82).
