@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.58 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.59 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.59):** Farmstead's VP B is now inside a farmhouse (§10.5). The walled yard is replaced by a 16x16-cell building (cells 25–40, 24–39) whose walled keep holds the VP. From either side you go through a front foyer or a side door into a corner room, then along a side corridor (with a baffle wall) to one of the keep's two doorways, which face east and west, not toward either deployment zone. The keep's wall facing each foyer has two windows and a weakened cell (32, 28 / 32, 35) that C4 can open, replacing the yard's weakened walls. Crates and barrels give cover inside the keep and foyers. The map stays mirrored. Also fixes wall corners: the weakened walls beside the old yard's and the C room's corners stopped 35 cm short of the corner post, leaving a visible gap. In 40 bot matches (sides swapped in half) every match was decided, the south side won 21 and the north 19, and bots took and held the keep. Built by `Scripts/Maps/build_farmhouse_b.py`, which holds the plan.
 
 > **Changelog (v0.58):** Stress raised so it matters in a fight (§8.2, §16.5; _provisional_). Each round fired at a soldier now adds **12 stress** (was 5), still reduced by cover: 6 behind a low wall. New **casualty stress**: when a soldier is injured or killed, every living squad-mate within **10 m** gains **20 stress** (not on a bleed-out; cover doesn't reduce it). In the projectile model each round passing within 1.5 m adds **8** (its own value, since one round can stress several soldiers). In 4v4 bot matches about half of all soldiers now reach the Minor tier and a quarter Major (was 1% and none), and over a third of shots are fired with a stress penalty, without changing who wins. Fights are no longer (half of all deaths still by about 20 s): trials of a moving-target accuracy penalty and an aim-settling penalty after a move didn't slow them either, because bots fight in the open; those weren't adopted. Machine guns (§6.1) suppress about 2.4× faster as a result. `AIMatchBatch.ps1 -Tuning` sets data-asset values for a batch (§11.2). Review: `Docs/Balancing/2026-11-25_tempo_stress/`.
 
@@ -575,18 +577,33 @@ Each team has one Deployment Zone (DZ): an **8x8-cell** block at its own edge of
 | Allied DZ | 34–41, 1–8 | 8x8 | South edge, just inside the boundary wall. |
 | Axis DZ | 34–41, 55–62 | 8x8 | North edge, mirroring the Allied DZ. |
 | VP A — Orchard | 9–14, 29–34 | 6x6 | Among the orchard trees, west. |
-| VP B — Farmyard | 30–35, 29–34 | 6x6 | A walled yard, centre: window walls on rows 30 and 33 with a 3-cell doorway (32–34) in each, and window walls along columns 29 and 37. |
+| VP B — Farmhouse | 30–35, 29–34 | 6x6 | The walled keep in the middle of a 16x16 farmhouse (cells 25–40, 24–39), centre. See the plan below. |
 | VP C — Barn | 50–55, 29–34 | 6x6 | Inside a walled room, east: walls on rows 28 and 35, each with a doorway at 53–54 and windows, and window walls along columns 49 and 57. |
 
 All three VPs lie on the map's centre line, so each is the same distance from both DZs (in a straight line, centre to centre: A ≈ 37.5 m, B ≈ 27.5 m, C ≈ 31 m).
 
 **Symmetry.** The map is mirrored across the line between rows 31 and 32: the cover on cell (X, Y) is the same as on (X, 63 − Y), so neither side's approach is easier. Keep it that way when editing the level (`Scripts/Maps/mirror_farmstead.py` rebuilds the north half from the south half).
 
+**VP B farmhouse.** Walls 2.6 m with windows, entered from both sides the same way (the north half mirrors the south). Plan of the south half, x = 25 (left) to 40, y = 24 (bottom row here) to 31; `#` wall, `w` window, `B` weakened wall, `c` crates, `b` barrels, `.` floor or doorway:
+
+```
+y=31  #.#..........#.#   keep doorways (29, 36) at rows 31–32
+y=30  w.#.#.c..b.#.#.w   baffle walls (27, 38) in the side corridors; cover in the keep
+y=29  #...#......#...#   side corridors 26–28 / 37–39 | keep = VP B, 30–35 x 29–34
+y=28  #.###w#B#w####.#   keep wall: 2 windows + weakened cell facing the foyer; doorways 26 / 39 to the corner rooms
+y=27  #...#......#...#
+y=26  ................   side doors (25, 40); doorways (29, 36) between foyer and corner rooms
+y=25  #...#c....c#...#   corner rooms 26–28 / 37–39, foyer 30–35
+y=24  ##w##w#..#w##w##   outer wall, front door 32–33
+```
+
+To reach the keep without C4 you pass four doorways from the front door (outer door, foyer to corner room, corner room to side corridor, keep doorway), or three from a side door. Defenders in the keep cover two doorways and the foyer windows.
+
 **Weakened walls (§9.4)** — _provisional placement:_
 
 | Wall | Cells (X, Y) | Breach opens |
 | ---- | ------------ | ------------ |
-| B yard, south / north | 36, 30 and 36, 33 | A second way into the B yard beside its doorway, from that side. |
+| B keep, south / north | 32, 28 and 32, 35 | A way into the keep straight from that side's foyer, instead of round through a corner room and side corridor. |
 | C room, south / north | 56, 28 and 56, 35 | A second way into VP C's walled room beside its doorway (53–54), from that side. |
 
 ## 11. Victory Conditions

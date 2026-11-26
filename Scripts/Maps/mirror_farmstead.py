@@ -18,8 +18,10 @@ Run in the full editor with Farmstead open (actor duplication crashes the headle
     UnrealEditor.exe Unreal.uproject /Game/Maps/Farmstead -ExecCmds="py C:/.../Scripts/Maps/mirror_farmstead.py"
 It saves the level and quits the editor. Writes a report to Saved/MapAudit/mirror_farmstead.txt.
 Running it twice is harmless: the second pass finds a symmetric level and replaces each north piece with an
-identical copy.
+identical copy. The VP B farmhouse (v0.59) is built by build_farmhouse_b.py.
 """
+import math
+
 import unreal
 
 LEVEL = "/Game/Maps/Farmstead"
@@ -68,8 +70,8 @@ def mirror_cover(world):
 
 
 # A merged line that should end at corner pieces: (axis, line coordinate) -> (first, last) cell along the line.
-# The B yard's west wall: windows only between its corners at (29, 30) and (29, 33).
-TRIM = {("x", 29): (31, 32)}
+# (Empty since v0.59: the B farmhouse is built by build_farmhouse_b.py, already symmetric.)
+TRIM = {}
 
 
 def place_run(template, axis, line, first, last):
@@ -180,6 +182,11 @@ def place_breachables(world):
         if any(isinstance(a, unreal.BreachableWall) for a in here):
             continue
         z = here[0].get_actor_location().z if here else 0.0
+        ext = (0.0, 0.0)
+        if here and abs(round(math.cos(math.radians(here[0].get_actor_rotation().yaw)))) == 1:
+            flip = round(math.cos(math.radians(here[0].get_actor_rotation().yaw))) < 0
+            se, ee = here[0].get_editor_property("StartExtension"), here[0].get_editor_property("EndExtension")
+            ext = (ee, se) if flip else (se, ee)
         for a in here:
             if len(cells(a)) != 1:
                 report.append("BREACHABLE %s: cell is part of a longer piece %s" % (cell, a.get_actor_label()))
@@ -188,6 +195,8 @@ def place_breachables(world):
         wall = ACT.spawn_actor_from_class(unreal.BreachableWall, unreal.Vector(cell[0] * 100.0 - 3150.0, cell[1] * 100.0 - 3150.0, z),
                                           unreal.Rotator(roll=0.0, pitch=0.0, yaw=0.0))
         wall.set_editor_property("Length", 1)
+        wall.set_editor_property("StartExtension", ext[0])
+        wall.set_editor_property("EndExtension", ext[1])
         wall.set_folder_path("Farmstead/Cover")
         if cells(wall) != {cell}:
             report.append("BREACHABLE MISMATCH %s: %s" % (cell, sorted(cells(wall))))
