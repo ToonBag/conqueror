@@ -102,6 +102,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress", meta = (ClampMin = "0", Units = "cm"))
 	float NearMissRadius = 150.f;
 
+	/**
+	 * Stress each passing round adds, before cover (GDD §16.5, provisional). Replaces USoldierData::StressPerIncomingShot
+	 * in this model: one round can stress several soldiers, and a burst stresses for each round that passes close.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress", meta = (ClampMin = "0"))
+	float NearMissStress = 8.f;
+
 	// ------------------------------------------------------------------ Friendly fire
 
 	/** A round hitting a friendly soldier injures it (never kills). False: friendly rounds pass through. */

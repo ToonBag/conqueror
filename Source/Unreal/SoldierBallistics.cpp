@@ -516,8 +516,8 @@ void ASoldier::OnBallisticNearMiss(const ASoldier* Shooter)
 	{
 		return;
 	}
-	// GDD §16: a round passing close (or striking the soldier's cover) stresses like an incoming shot did (§8.2),
-	// reduced by the cover the soldier has against the shooter.
+	// GDD §16.5: a round passing close (or striking the soldier's cover) stresses the soldier (NearMissStress, in
+	// place of §8.2's per-shot stress), reduced by the cover the soldier has against the shooter.
 	const USoldierData* D = GetSoldierData();
 	float CoverFactor = 1.f;
 	if (Grid && Shooter)
@@ -525,6 +525,6 @@ void ASoldier::OnBallisticNearMiss(const ASoldier* Shooter)
 		const FCoverResult Cover = Grid->GetCoverAgainst(CurrentCell, Shooter->GetCurrentCell(), TOptional<float>(GetActorRotation().Yaw));
 		CoverFactor = FMath::Clamp(1.f - Cover.Reduction / 100.f * D->CoverStressReductionScale, 0.f, 1.f);
 	}
-	AddStress(D->StressPerIncomingShot * CoverFactor);
+	AddStress(UBallisticsSubsystem::GetData()->NearMissStress * CoverFactor);
 	UnderFireRemaining = UnderFireTime;
 }

@@ -14,6 +14,7 @@
   ./Scripts/AIMatchBatch.ps1 -SquadsPerTeam 1         # 1v1 squads
   ./Scripts/AIMatchBatch.ps1 -SwapSides               # Axis start south, Allies north (map-bias test)
   ./Scripts/AIMatchBatch.ps1 -Ballistics              # experimental projectile combat (GDD §16)
+  ./Scripts/AIMatchBatch.ps1 -Tuning "StressPerIncomingShot=12;SettleTime=1"   # trial tuning values
 #>
 param(
     [int]$Matches = 10,
@@ -24,6 +25,7 @@ param(
     [switch]$SwapSides,          # each faction starts in the other's deployment zone (map-bias test)
     [switch]$Ballistics,         # squad.Ballistics 1: projectile combat instead of hit-chance rolls (GDD §16)
     [string]$Map = "/Game/Maps/Farmstead",
+    [string]$Tuning = "",        # squad.TuningOverrides: 'Prop=Value;Prop=Value' on the data assets (balancing trials)
     [int]$BasePort = 17800,
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
 )
@@ -42,6 +44,7 @@ function Start-Match([int]$i) {
         "${cv}squad.SquadsPerTeam=$SquadsPerTeam", "${cv}squad.MinPlayers=0", "${cv}squad.MatchStats=1",
         "${cv}squad.QuitAfterMatch=1", "${cv}squad.MatchSeed=$seed", "${cv}squad.MatchTimeLimit=$TimeLimit",
         "${cv}squad.SwapSides=$([int][bool]$SwapSides)", "${cv}squad.Ballistics=$([int][bool]$Ballistics)")
+    if ($Tuning) { $argv += "`"${cv}squad.TuningOverrides=$Tuning`"" }
     $p = Start-Process $Editor -PassThru -WindowStyle Hidden -ArgumentList $argv
     Write-Host "match $i  seed $seed  pid $($p.Id)"
     return $p

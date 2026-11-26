@@ -199,9 +199,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress", meta = (ClampMin = "0"))
 	float MajorStressThreshold = 66.f;
 
-	/** Stress added by each round fired at the soldier, hit or miss, before cover. */
+	/**
+	 * Stress added by each round fired at the soldier, hit or miss, before cover (GDD §8.2, 12 since v0.58). The
+	 * projectile model uses UBallisticsData::NearMissStress instead.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress", meta = (ClampMin = "0"))
-	float StressPerIncomingShot = 5.f;
+	float StressPerIncomingShot = 12.f;
 
 	/**
 	 * GDD §9: cover reduces stress from incoming fire. A shot's stress is multiplied by
@@ -230,6 +233,17 @@ public:
 	/** Provisional: seconds after the last stress gain before decay starts ("no stress-gain triggers active"). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress|Decay", meta = (ClampMin = "0"))
 	float StressDecayDelay = 1.f;
+
+	/**
+	 * GDD §8.2 (provisional): stress added to every living squad-mate within CasualtyStressRadius when a soldier is
+	 * injured or killed (not when it bleeds out). Cover doesn't reduce it. 0 turns it off.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress|Casualties", meta = (ClampMin = "0"))
+	float CasualtyStress = 20.f;
+
+	/** GDD §8.2 (provisional): metres within which squad-mates take CasualtyStress. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress|Casualties", meta = (ClampMin = "0"))
+	float CasualtyStressRadius = 10.f;
 
 	/** Provisional amounts for GDD §8.1 "minor reductions to fire rate, fumbled reloads, and aim stability". */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stress|Effects")

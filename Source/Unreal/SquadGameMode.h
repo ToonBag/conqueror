@@ -63,6 +63,9 @@ private:
 	/** Starts the match: plans, test MGs and bots. Waits for the first player on a dedicated server (squad.MinPlayers). */
 	void StartMatch();
 
+	/** Balancing tests: applies squad.TuningOverrides to the loaded data assets. */
+	void ApplyTuningOverrides();
+
 	/** Bots for squads no player commands (Except: a player logging out). */
 	void SpawnBots(const AController* Except = nullptr);
 

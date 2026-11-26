@@ -13,6 +13,9 @@
 #include "TacticalPlan.h"
 #include "VictoryPoint.h"
 #include "WeaponData.h"
+#include "Ballistics.h"
+#include "BallisticsData.h"
+#include "SoldierData.h"
 #include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
@@ -46,6 +49,28 @@ namespace
 		TEXT("squad.VPWinTime"), 0.f,
 		TEXT("Overrides the Victory Point win timer in seconds for testing (0: use the game mode's VPWinTime, 5 minutes)."),
 		ECVF_Cheat);
+
+	TAutoConsoleVariable<FString> CVarTuningOverrides(
+		TEXT("squad.TuningOverrides"), TEXT(""),
+		TEXT("Balancing test (server): 'Prop=Value;Prop=Value' set on the soldier, weapon and ballistics data assets in memory when the match starts (e.g. StressPerIncomingShot=12;SettleTime=1). Changes the loaded assets for the rest of the process, so use it on throwaway servers (AIMatchBatch -Tuning), not in the editor."),
+		ECVF_Default);
+
+	/** Sets Name=Value on Object if it has that property. True if it did. */
+	bool ApplyTuningOverride(UObject* Object, const FString& Name, const FString& Value)
+	{
+		FProperty* Prop = Object ? Object->GetClass()->FindPropertyByName(FName(*Name)) : nullptr;
+		if (!Prop)
+		{
+			return false;
+		}
+		if (!Prop->ImportText_Direct(*Value, Prop->ContainerPtrToValuePtr<void>(Object), Object, PPF_None))
+		{
+			UE_LOG(LogSquadMatch, Warning, TEXT("Tuning override %s=%s: bad value for %s."), *Name, *Value, *Object->GetName());
+			return false;
+		}
+		UE_LOG(LogSquadMatch, Log, TEXT("Tuning override: %s.%s = %s"), *Object->GetName(), *Name, *Value);
+		return true;
+	}
 
 	const TCHAR* TeamName(ESquadTeam Team)
 	{
@@ -159,6 +184,7 @@ void ASquadGameMode::StartMatch()
 	}
 	UE_LOG(LogSquadMatch, Log, TEXT("Match seed %d (squad.MatchSeed)."), MatchSeed);
 
+	ApplyTuningOverrides();
 	SpawnTacticalPlans();
 	GiveTestMachineGuns();
 	if (bSpawnBotsForUncommandedTeams)
@@ -596,5 +622,47 @@ void ASquadGameMode::EndMatch(ESquadTeam Winner, EVictoryReason Reason)
 	if (bPauseOnMatchEnd)
 	{
 		UGameplayStatics::SetGamePaused(this, true);
+	}
+}
+
+void ASquadGameMode::ApplyTuningOverrides()
+{
+	const FString Spec = CVarTuningOverrides.GetValueOnGameThread();
+	if (Spec.IsEmpty())
+	{
+		return;
+	}
+	// Every data asset the soldiers use (soldier tuning, each rifle / MG) plus the projectile tuning.
+	TSet<UObject*> Targets;
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		Targets.Add(const_cast<USoldierData*>(It->GetSoldierData()));
+		for (const FLootWeapon& W : It->GetInventory().Weapons)
+		{
+			Targets.Add(W.Weapon.Get());
+		}
+	}
+	Targets.Add(const_cast<UBallisticsData*>(UBallisticsSubsystem::GetData()));
+	Targets.Remove(nullptr);
+	TArray<FString> Pairs;
+	Spec.ParseIntoArray(Pairs, TEXT(";"));
+	for (const FString& Pair : Pairs)
+	{
+		FString Name, Value;
+		if (!Pair.Split(TEXT("="), &Name, &Value))
+		{
+			continue;
+		}
+		Name.TrimStartAndEndInline();
+		Value.TrimStartAndEndInline();
+		bool bAny = false;
+		for (UObject* Target : Targets)
+		{
+			bAny |= ApplyTuningOverride(Target, Name, Value);
+		}
+		if (!bAny)
+		{
+			UE_LOG(LogSquadMatch, Warning, TEXT("Tuning override %s: no data asset has that property."), *Name);
+		}
 	}
 }

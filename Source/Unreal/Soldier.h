@@ -1033,6 +1033,8 @@ private:
 	float Stress = 0.f;
 	/** Seconds left before stress starts to decay again. */
 	float StressDecayHold = 0.f;
+	/** Stress on squad-mates near this soldier when it becomes a casualty (GDD §8.2, USoldierData::CasualtyStress). */
+	void ApplyCasualtyStress();
 
 	/** Server-owned: an enemy soldier currently has line of sight to this one. */
 	bool bSpottedByEnemy = false;

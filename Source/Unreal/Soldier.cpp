@@ -23,6 +23,7 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
@@ -1057,6 +1058,7 @@ void ASoldier::ReceiveHit(float DistanceMetres, const FKillCause& Cause)
 		return;
 	}
 	bInjured = true;
+	ApplyCasualtyStress();
 	// GDD §5.1: an untreated injury kills after BleedOutTime; the death is credited to this hit.
 	BleedOutRemaining = GetSoldierData()->BleedOutTime;
 	InjuredBy = Cause.Killer;
@@ -1113,6 +1115,10 @@ void ASoldier::Die(const FKillCause& Cause)
 	}
 	if (HasAuthority())
 	{
+		if (!Cause.bBledOut)
+		{
+			ApplyCasualtyStress();
+		}
 		if (ASquadGameState* GameState = GetWorld()->GetGameState<ASquadGameState>())
 		{
 			FKillFeedEntry Entry;
@@ -1215,6 +1221,26 @@ EStressTier ASoldier::GetStressTier() const
 const FStressTierEffects& ASoldier::GetStressEffects() const
 {
 	return GetSoldierData()->GetStressEffects(GetStressTier());
+}
+
+void ASoldier::ApplyCasualtyStress()
+{
+	// GDD §8.2: a squad-mate injured or killed nearby. Cover doesn't help.
+	const USoldierData* D = GetSoldierData();
+	if (!HasAuthority() || D->CasualtyStress <= 0.f)
+	{
+		return;
+	}
+	const float RadiusSq = FMath::Square(D->CasualtyStressRadius * UUPerMetre);
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		ASoldier* Mate = *It;
+		if (Mate != this && Mate->Team == Team && Mate->SquadId == SquadId && !Mate->bDead
+			&& FVector::DistSquared2D(Mate->GetActorLocation(), GetActorLocation()) <= RadiusSq)
+		{
+			Mate->AddStress(D->CasualtyStress);
+		}
+	}
 }
 
 void ASoldier::AddStress(float Amount)
