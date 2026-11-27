@@ -29,9 +29,15 @@ class AVictoryPoint;
  *    with a long way still to go may make it stop to fight.
  *
  * Plan: every able soldier is assigned a VP (unowned VPs first, one each; spares reinforce the most
- * threatened VP). Soldiers hold cells with cover facing the enemy, spaced apart, fall back to nearby cover
- * when pinned in the open with poor shots, throw grenades at noticed enemies when shots are poor or enemies
- * bunch up (never near a squad-mate), and run from grenades they notice landing near them.
+ * threatened VP). Soldiers hold cells with cover facing the enemy and a view of it, spaced apart, throw
+ * grenades at noticed enemies when shots are poor or enemies bunch up (never near a squad-mate), and run from
+ * grenades they notice landing near them.
+ *
+ * Tactics (GDD §11.1): long moves go in bounds from cover to cover with pauses, half the squad covering the
+ * other half when contact is expected; soldiers don't cross ground a free enemy can see (squad-mates pin it
+ * first), break for cover when caught in the open under fire, keep their heads down behind low cover when
+ * badly stressed, and flank an enemy whose cover they can't shoot through. Enemies the team spots off screen
+ * are noticed on the minimap, more slowly.
  *
  * With several squads per team (squad.SquadsPerTeam) each squad has its own bot. Bots of one team see each
  * other's VP assignments and slots (as teammates would) to spread out and not grenade each other.
@@ -93,6 +99,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Perception", meta = (ClampMin = "0"))
 	float NoticeEdgeDelay = 0.6f;
 
+	/**
+	 * Seconds to notice an enemy the team spots off screen: the minimap shows it as a red dot (GDD §13). Once noticed it
+	 * is followed on the minimap while the team keeps it in sight.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Perception", meta = (ClampMin = "0"))
+	FVector2D MinimapNoticeTime = FVector2D(1.5f, 3.f);
+
 	/** Seconds a noticed enemy is remembered (at its last seen cell) after it was last seen. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Perception", meta = (ClampMin = "0"))
 	float MemoryTime = 10.f;
@@ -145,13 +158,82 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Grenades", meta = (ClampMin = "0"))
 	float GrenadeNoticeTime = 0.4f;
 
-	/** Fall back to cover when under fire, out of cover and the best shot is below this hit chance (percent). */
+	/** Under fire and out of cover: move to cover unless its own shot is at least this good (percent). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover")
-	float SeekCoverHitChance = 20.f;
+	float SeekCoverHitChance = 35.f;
 
 	/** How far (cells) a soldier looks for cover to fall back to. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover", meta = (ClampMin = "1"))
 	int32 CoverSearchRadius = 5;
+
+	/** Score added to a VP cell that sees the expected enemy position within rifle range (cover is worth up to 60). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover", meta = (ClampMin = "0"))
+	float FieldOfFireBonus = 20.f;
+
+	/** A soldier caught in the open on a move with at least this many steps left breaks for the nearest cover. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover", meta = (ClampMin = "1"))
+	int32 BreakForCoverMinSteps = 4;
+
+	/** Behind hay or a low wall, at this stress or more and with poor shots, the soldier goes prone (hidden) to recover... */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover", meta = (ClampMin = "0", ClampMax = "100"))
+	float HeadDownStress = 66.f;
+
+	/** ...and only while its best shot is below this hit chance (percent)... */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover")
+	float HeadDownMaxShot = 30.f;
+
+	/** ...and comes back up (standing) once stress has fallen to this. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Cover", meta = (ClampMin = "0", ClampMax = "100"))
+	float HeadUpStress = 30.f;
+
+	// ---------------------------------------------------------------- Advancing (bounds and overwatch)
+
+	/**
+	 * Longest bound (cells) between cover positions on the way to a slot, with no enemy expected (X) and in contact
+	 * (Y: an enemy is known, the soldier is under fire, or it is within CautionRadius of a VP the team doesn't hold). Longer moves are broken into bounds that end in cover.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance")
+	FVector2D BoundLength = FVector2D(12.f, 7.f);
+
+	/**
+	 * Within this many metres of a VP the team doesn't hold (or that is contested) the squad advances as if in contact:
+	 * short bounds, longer pauses, half the squad covering the other half. The enemy is heading for the same VPs.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance", meta = (ClampMin = "0"))
+	float CautionRadius = 25.f;
+
+	/** Seconds a soldier waits in cover at the end of a bound, with no enemy expected (X) and in contact (Y). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance")
+	FVector2D BoundPauseQuiet = FVector2D(0.3f, 0.9f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance")
+	FVector2D BoundPauseContact = FVector2D(1.5f, 3.f);
+
+	/** In contact (see BoundLength), at most this fraction of the squad's able soldiers move at once; the rest cover them. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance", meta = (ClampMin = "0.1", ClampMax = "1"))
+	float MaxMovingFraction = 0.5f;
+
+	/** A soldier fighting from a bound position keeps advancing (when it may move) while its shot is below this. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Advance")
+	float AdvanceUnderFireShot = 30.f;
+
+	// ---------------------------------------------------------------- Flanking
+
+	/** A soldier whose best shot is below this (an enemy in cover) may move round to a cell that cover doesn't protect. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Flank")
+	float FlankShotChance = 25.f;
+
+	/** How far (cells) a soldier looks for a flanking position. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Flank", meta = (ClampMin = "1"))
+	int32 FlankSearchRadius = 8;
+
+	/** Seconds the soldier holds a flanking position before going back to its VP. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Flank", meta = (ClampMin = "0"))
+	float FlankHoldTime = 20.f;
+
+	/** Seconds before the same soldier tries another flank. One soldier of a squad flanks at a time. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bot|Flank", meta = (ClampMin = "0"))
+	float FlankCooldown = 25.f;
 
 	// ---------------------------------------------------------------- Medkits (GDD §5.2)
 
@@ -204,6 +286,16 @@ private:
 		bool bWasAlerting = false;
 		/** While injured: when the bot will have noticed and may send a medic (-1 while not injured). */
 		float InjuryNoticedAt = -1.f;
+		/** On a bound towards the slot: the cover cell it is heading for. */
+		bool bBounding = false;
+		FIntPoint BoundCell = FIntPoint(INT32_MIN, INT32_MIN);
+		/** Don't start the next bound before this time (pausing in cover). */
+		float NextBound = 0.f;
+		/** Went prone behind low cover to recover from stress (GDD §8, §9.3). */
+		bool bHeadDown = false;
+		/** Holding a flanking position (Slot, outside the VP) until this time. */
+		float FlankUntil = 0.f;
+		float NextFlank = 0.f;
 	};
 
 	/**
@@ -220,6 +312,9 @@ private:
 		float NoticeProgress = 0.f;
 		/** Delay needed to notice it this time (rolled when it comes into view). */
 		float NoticeRequired = -1.f;
+		/** The same for spotting it as a red dot on the minimap while it is off screen (slower than on screen). */
+		float MapProgress = 0.f;
+		float MapRequired = -1.f;
 		bool bKnown = false;
 		FIntPoint LastKnownCell = FIntPoint::ZeroValue;
 		float LastSeenTime = -1000.f;
@@ -254,8 +349,33 @@ private:
 	bool TryDodgeGrenade(ASoldier& Soldier);
 	bool TryThrowGrenade(FSoldierBrain& Brain);
 	bool TrySeekCover(FSoldierBrain& Brain, FIntPoint ThreatCell);
+	/** Move towards the slot (in bounds from cover to cover, covered by squad-mates while enemies are known). */
 	void HoldObjective(FSoldierBrain& Brain);
 	bool PickSlot(FSoldierBrain& Brain);
+
+	/** Next cover cell on the way to Goal, at most a bound away; false if the soldier should just go straight. */
+	bool PickBoundCell(const FSoldierBrain& Brain, FIntPoint Goal, FIntPoint& OutCell) const;
+
+	/**
+	 * True if a recently seen enemy that is free to shoot (not under fire itself, not downed) would see the soldier
+	 * on the way to Goal or at Goal without cover: a player doesn't walk a soldier across an enemy's sights.
+	 */
+	bool IsRouteWatched(const ASoldier& Soldier, FIntPoint Goal) const;
+
+	/** Contact or expected contact: an enemy is known, the soldier is under fire, or it is near a VP the team doesn't hold. */
+	bool IsCautious(const ASoldier& Soldier) const;
+
+	/** While cautious, true if enough squad-mates are already moving that this soldier should cover them. */
+	bool ShouldHoldForOverwatch(const ASoldier& Soldier) const;
+
+	/** Prone and able to stand: order it up before a move (prone soldiers crawl). True if an order was issued. */
+	bool StandUpToMove(ASoldier& Soldier);
+
+	/** Go prone behind low cover when stressed and outgunned; come back up once recovered. True if an order was issued. */
+	bool UpdateHeadDown(FSoldierBrain& Brain, float BestChance);
+
+	/** Move round an enemy that sits in cover to a cell its cover doesn't protect against. */
+	bool TryFlank(FSoldierBrain& Brain, float BestChance);
 
 	/** Score (higher is better) of Cell as a place to hold: cover against the enemy, spacing from squad-mates. */
 	float ScoreHoldCell(FIntPoint Cell, const ASoldier& Soldier, FIntPoint ThreatCell) const;

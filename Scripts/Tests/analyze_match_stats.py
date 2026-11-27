@@ -335,6 +335,23 @@ def main():
             lost = sum(a["result"] == "lost" for a in rush)
             p(f"\n- Rush success (won / (won + lost)): {pct(won, won + lost)}. Above 50% means charging across open ground pays.")
 
+        # ---- Exposure: how the soldiers spend their time while the enemy can see them (bot tactics, GDD §11.1).
+        p("\n## Exposure\n")
+        p("Share of position samples of active soldiers. **Seen** = spotted by the enemy. **In cover** = leaning on cover.\n")
+        p("| Side | Samples | Seen | Seen, in the open | Seen, moving | Under fire | Under fire, in the open | Prone (active) |")
+        p("|---|---|---|---|---|---|---|---|")
+        for side in ("All", "Allies", "Axis"):
+            rows = [r for m in tracked for r in m["_track"] if r["state"] == "active" and side in ("All", r["team"])]
+            if not rows:
+                continue
+            seen = [r for r in rows if r["spotted"] == "1"]
+            fire = [r for r in rows if r["under_fire"] == "1"]
+            p(f"| {side} | {len(rows)} | {pct(len(seen), len(rows))} "
+              f"| {pct(sum(r['leaning_on_cover'] != '1' for r in seen), len(rows))} "
+              f"| {pct(sum(r['moving'] == '1' for r in seen), len(rows))} | {pct(len(fire), len(rows))} "
+              f"| {pct(sum(r['leaning_on_cover'] != '1' for r in fire), len(rows))} "
+              f"| {pct(sum(r['stance'] == 'prone' for r in rows), len(rows))} |")
+
     text = "\n".join(out) + "\n"
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:
