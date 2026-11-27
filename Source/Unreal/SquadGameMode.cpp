@@ -50,6 +50,11 @@ namespace
 		TEXT("Overrides the Victory Point win timer in seconds for testing (0: use the game mode's VPWinTime, 5 minutes)."),
 		ECVF_Cheat);
 
+	TAutoConsoleVariable<float> CVarMatchTime(
+		TEXT("squad.MatchTime"), 0.f,
+		TEXT("Overrides the match time limit in seconds (0: the map's limit, else the game mode's MatchTimeLimit, 20 minutes; below 0: no time limit)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<FString> CVarTuningOverrides(
 		TEXT("squad.TuningOverrides"), TEXT(""),
 		TEXT("Balancing test (server): 'Prop=Value;Prop=Value' set on the soldier, weapon and ballistics data assets in memory when the match starts (e.g. StressPerIncomingShot=12;SettleTime=1). Changes the loaded assets for the rest of the process, so use it on throwaway servers (AIMatchBatch -Tuning), not in the editor."),
@@ -139,7 +144,7 @@ void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
 	}
 	if (bMatchStarted)
 	{
-		GiveTestMachineGuns();
+		GiveTestWeapons();
 	}
 }
 
@@ -186,7 +191,7 @@ void ASquadGameMode::StartMatch()
 
 	ApplyTuningOverrides();
 	SpawnTacticalPlans();
-	GiveTestMachineGuns();
+	GiveTestWeapons();
 	if (bSpawnBotsForUncommandedTeams)
 	{
 		SpawnBots();
@@ -385,32 +390,43 @@ int32 ASquadGameMode::CountPlayers(ESquadTeam Team, const AController* Except) c
 	return Count;
 }
 
-void ASquadGameMode::GiveTestMachineGuns()
+void ASquadGameMode::GiveTestWeapons()
 {
-	if (TestMachineGunSoldier <= 0)
+	TSet<int32> NewSquads = GetCommandedSquads().Difference(SquadsGivenTestWeapons);
+	SquadsGivenTestWeapons.Append(NewSquads);
+	if (NewSquads.IsEmpty())
 	{
 		return;
 	}
-	TSet<int32> NewSquads = GetCommandedSquads().Difference(SquadsGivenTestMG);
-	SquadsGivenTestMG.Append(NewSquads);
+	struct FTestWeapon { int32 SquadNumber; const TSoftObjectPtr<UWeaponData>* Allied; const TSoftObjectPtr<UWeaponData>* Axis; const TCHAR* Kind; };
+	const FTestWeapon TestWeapons[] = {
+		{ TestMachineGunSoldier, &AlliedTestMachineGun, &AxisTestMachineGun, TEXT("machine gun") },      // GDD §6.1
+		{ TestSubmachineGunSoldier, &AlliedTestSubmachineGun, &AxisTestSubmachineGun, TEXT("submachine gun") }, // GDD §6.2
+	};
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
 	{
 		ASoldier* Soldier = *It;
-		if (Soldier->GetSquadNumber() != TestMachineGunSoldier || !NewSquads.Contains(SquadKey(Soldier->Team, Soldier->SquadId)) || Soldier->IsDead())
+		if (!NewSquads.Contains(SquadKey(Soldier->Team, Soldier->SquadId)) || Soldier->IsDead())
 		{
 			continue;
 		}
-		UWeaponData* MG = (Soldier->Team == ESquadTeam::Allies ? AlliedTestMachineGun : AxisTestMachineGun).LoadSynchronous();
-		if (!MG)
+		for (const FTestWeapon& Test : TestWeapons)
 		{
-			UE_LOG(LogSquadMatch, Warning, TEXT("Testing: no %s machine gun data asset; soldier %d keeps its rifle."),
-				TeamName(Soldier->Team), TestMachineGunSoldier);
-		}
-		else
-		{
-			Soldier->EquipStartingWeapon(MG);
+			if (Test.SquadNumber <= 0 || Soldier->GetSquadNumber() != Test.SquadNumber)
+			{
+				continue;
+			}
+			UWeaponData* Weapon = (Soldier->Team == ESquadTeam::Allies ? *Test.Allied : *Test.Axis).LoadSynchronous();
+			if (!Weapon)
+			{
+				UE_LOG(LogSquadMatch, Warning, TEXT("Testing: no %s %s data asset; soldier %d keeps its rifle."),
+					TeamName(Soldier->Team), Test.Kind, Test.SquadNumber);
+				continue;
+			}
+			Soldier->EquipStartingWeapon(Weapon);
 			UE_LOG(LogSquadMatch, Log, TEXT("Testing: %s soldier %d starts with the %s."), TeamName(Soldier->Team),
-				TestMachineGunSoldier, *MG->DisplayName.ToString());
+				Test.SquadNumber, *Weapon->DisplayName.ToString());
+			break; // Same number for both: the machine gun wins.
 		}
 	}
 }
@@ -419,6 +435,39 @@ float ASquadGameMode::GetVPWinTime() const
 {
 	const float Override = CVarVPWinTime.GetValueOnGameThread();
 	return Override > 0.f ? Override : VPWinTime;
+}
+
+float ASquadGameMode::GetMatchTimeLimit() const
+{
+	const float Override = CVarMatchTime.GetValueOnGameThread();
+	if (Override < 0.f)
+	{
+		return 0.f;
+	}
+	if (Override > 0.f)
+	{
+		return Override;
+	}
+	for (TActorIterator<AGridManager> It(GetWorld()); It; ++It)
+	{
+		if (It->MatchTimeLimit > 0.f)
+		{
+			return It->MatchTimeLimit;
+		}
+	}
+	return MatchTimeLimit;
+}
+
+void ASquadGameMode::OnSoldierDied(const ASoldier& Victim)
+{
+	if (!bMatchStarted || bMatchEnded)
+	{
+		return;
+	}
+	if (ASquadGameState* GS = GetGameState<ASquadGameState>())
+	{
+		GS->AddKillPoints(Victim.Team == ESquadTeam::Allies ? ESquadTeam::Axis : ESquadTeam::Allies, PointsPerKill);
+	}
 }
 
 void ASquadGameMode::Tick(float DeltaSeconds)
@@ -542,6 +591,11 @@ void ASquadGameMode::CheckVictory(float DeltaSeconds)
 		return;
 	}
 
+	// ---- Match clock (GDD §3.5).
+	MatchElapsed += DeltaSeconds;
+	const float TimeLimit = GetMatchTimeLimit();
+	GS->SetMatchClock(MatchElapsed, TimeLimit);
+
 	// ---- Annihilation (GDD §11): every soldier of a team is dead.
 	TMap<ESquadTeam, int32> Total, Alive;
 	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
@@ -577,6 +631,11 @@ void ASquadGameMode::CheckVictory(float DeltaSeconds)
 		}
 		VPOwner = It->GetOwningTeam();
 		++NumVPs;
+		// Points (GDD §11): the owner scores while it owns the VP, contested or not.
+		if (It->IsOwned())
+		{
+			GS->AddVPPoints(It->GetOwningTeam(), It->PointsPerMinute / 60.f * DeltaSeconds);
+		}
 	}
 	const bool bHeldNow = NumVPs > 0 && bAllSameOwner;
 	if (!bHeldNow || !bVPHeld || VPOwner != VPHoldingTeam)
@@ -594,6 +653,22 @@ void ASquadGameMode::CheckVictory(float DeltaSeconds)
 	if (bVPHeld && VPHoldElapsed >= Required)
 	{
 		EndMatch(VPHoldingTeam, EVictoryReason::VictoryPoints);
+		return;
+	}
+
+	// ---- Time limit (GDD §11): the higher score wins; level points are a draw.
+	if (TimeLimit > 0.f && MatchElapsed >= TimeLimit)
+	{
+		const int32 Allies = GS->GetScore(ESquadTeam::Allies);
+		const int32 Axis = GS->GetScore(ESquadTeam::Axis);
+		if (Allies == Axis)
+		{
+			EndMatch(ESquadTeam::Allies, EVictoryReason::TimeDraw);
+		}
+		else
+		{
+			EndMatch(Allies > Axis ? ESquadTeam::Allies : ESquadTeam::Axis, EVictoryReason::Points);
+		}
 	}
 }
 
@@ -604,19 +679,33 @@ void ASquadGameMode::EndMatch(ESquadTeam Winner, EVictoryReason Reason)
 	{
 		GS->SetMatchResult(Winner, Reason);
 	}
-	if (Reason == EVictoryReason::Draw)
+	const ASquadGameState* GS = GetGameState<ASquadGameState>();
+	const int32 AlliedScore = GS ? GS->GetScore(ESquadTeam::Allies) : 0;
+	const int32 AxisScore = GS ? GS->GetScore(ESquadTeam::Axis) : 0;
+	switch (Reason)
 	{
+	case EVictoryReason::Draw:
 		UE_LOG(LogSquadMatch, Log, TEXT("MATCH OVER: draw (both squads wiped out)."));
-	}
-	else
-	{
+		break;
+	case EVictoryReason::TimeDraw:
+		UE_LOG(LogSquadMatch, Log, TEXT("MATCH OVER: draw (time up, points level)."));
+		break;
+	default:
 		UE_LOG(LogSquadMatch, Log, TEXT("MATCH OVER: %s win by %s."), TeamName(Winner),
-			Reason == EVictoryReason::Annihilation ? TEXT("annihilation") : TEXT("holding every Victory Point"));
+			Reason == EVictoryReason::Annihilation ? TEXT("annihilation")
+			: Reason == EVictoryReason::Points ? TEXT("points") : TEXT("holding every Victory Point"));
+		break;
 	}
+	UE_LOG(LogSquadMatch, Log, TEXT("Score: Allies %d (kills %.0f, VPs %.1f), Axis %d (kills %.0f, VPs %.1f) after %.0f s."),
+		AlliedScore, GS ? GS->GetKillPoints(ESquadTeam::Allies) : 0.f, GS ? GS->GetVPPoints(ESquadTeam::Allies) : 0.f,
+		AxisScore, GS ? GS->GetKillPoints(ESquadTeam::Axis) : 0.f, GS ? GS->GetVPPoints(ESquadTeam::Axis) : 0.f, MatchElapsed);
 	if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
 	{
-		Stats->OnMatchEnded(Winner, Reason == EVictoryReason::Draw ? TEXT("draw")
-			: Reason == EVictoryReason::Annihilation ? TEXT("annihilation") : TEXT("victory_points"));
+		const TCHAR* ReasonName = Reason == EVictoryReason::Draw ? TEXT("draw")
+			: Reason == EVictoryReason::TimeDraw ? TEXT("time_draw")
+			: Reason == EVictoryReason::Points ? TEXT("points")
+			: Reason == EVictoryReason::Annihilation ? TEXT("annihilation") : TEXT("victory_points");
+		Stats->OnMatchEnded(Winner, ReasonName);
 	}
 	// TODO (GDD §14.4): report the result to the post-match ELO endpoint once the backend exists.
 	if (bPauseOnMatchEnd)

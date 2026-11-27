@@ -510,7 +510,7 @@ void ASoldier::OnBallisticRoundResolved(const FBallisticRound& Round, const FBal
 	}
 }
 
-void ASoldier::OnBallisticNearMiss(const ASoldier* Shooter)
+void ASoldier::OnBallisticNearMiss(const ASoldier* Shooter, float StressScale)
 {
 	if (bDead)
 	{
@@ -525,6 +525,6 @@ void ASoldier::OnBallisticNearMiss(const ASoldier* Shooter)
 		const FCoverResult Cover = Grid->GetCoverAgainst(CurrentCell, Shooter->GetCurrentCell(), TOptional<float>(GetActorRotation().Yaw));
 		CoverFactor = FMath::Clamp(1.f - Cover.Reduction / 100.f * D->CoverStressReductionScale, 0.f, 1.f);
 	}
-	AddStress(UBallisticsSubsystem::GetData()->NearMissStress * CoverFactor);
+	AddStress(UBallisticsSubsystem::GetData()->NearMissStress * StressScale * CoverFactor);
 	UnderFireRemaining = UnderFireTime;
 }

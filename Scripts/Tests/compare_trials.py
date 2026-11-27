@@ -29,7 +29,7 @@ def row(root, name):
             if w == "Allies": allies += 1
             elif w == "Axis": axis += 1
             else: timeouts += 1
-            if w: south, north = (south + 1, north) if w == south_team else (south, north + 1)
+            if w in ("Allies", "Axis"): south, north = (south + 1, north) if w == south_team else (south, north + 1)
     if not matches:
         return None
     soldiers = [s for j in matches for s in j["soldiers"]]

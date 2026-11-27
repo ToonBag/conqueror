@@ -34,6 +34,7 @@ namespace
 		case ESquadDebugAction::BotDebug:  return TEXT("squad.BotDebug");
 		case ESquadDebugAction::GodMode:   return TEXT("squad.GodMode");
 		case ESquadDebugAction::VPWinTime: return TEXT("squad.VPWinTime");
+		case ESquadDebugAction::MatchTime: return TEXT("squad.MatchTime");
 		default:                           return nullptr;
 		}
 	}
@@ -172,6 +173,16 @@ void ASquadPlayerController::RebuildDebugMenu()
 		{
 			Button(Row, FString::Printf(TEXT("%gs"), Seconds), ESquadDebugAction::VPWinTime, Seconds, FMath::IsNearlyEqual(VPTime, Seconds));
 		}
+	}
+	{
+		const float MatchTime = GetCVarFloat(CVarNameFor(ESquadDebugAction::MatchTime));
+		FDebugMenuRow& Row = AddRow(TEXT("Match time"));
+		Button(Row, TEXT("Default"), ESquadDebugAction::MatchTime, 0.f, MatchTime == 0.f);
+		for (const float Seconds : { 60.f, 180.f })
+		{
+			Button(Row, FString::Printf(TEXT("%gs"), Seconds), ESquadDebugAction::MatchTime, Seconds, FMath::IsNearlyEqual(MatchTime, Seconds));
+		}
+		Button(Row, TEXT("Off"), ESquadDebugAction::MatchTime, -1.f, MatchTime < 0.f);
 	}
 	{
 		FDebugMenuRow& Row = AddRow(TEXT("Map"));
@@ -452,6 +463,7 @@ void ASquadPlayerController::ServerDebugAction_Implementation(ESquadDebugAction 
 	case ESquadDebugAction::BotDebug:
 	case ESquadDebugAction::GodMode:
 	case ESquadDebugAction::VPWinTime:
+	case ESquadDebugAction::MatchTime:
 		SetCVar(CVarNameFor(Action), Param);
 		break;
 	case ESquadDebugAction::GameSpeed:

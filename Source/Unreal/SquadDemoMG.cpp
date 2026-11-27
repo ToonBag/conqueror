@@ -70,6 +70,10 @@ namespace
 		UWeaponData* Garand = nullptr;
 		UWeaponData* M1919 = nullptr;
 		UWeaponData* MG42 = nullptr;
+		UWeaponData* Thompson = nullptr;
+		UWeaponData* MP40 = nullptr;
+		/** Weapons the stats and crossing trials compare. */
+		TArray<UWeaponData*> StatsWeapons;
 		TArray<FSoldierRestore> Restore;
 		TArray<FStep> Steps;
 		int32 Index = -1;
@@ -82,6 +86,7 @@ namespace
 		// Saved console state.
 		int32 PrevBot = 1;
 		float PrevVPWinTime = 0.f;
+		float PrevMatchTime = 0.f;
 		float PrevSlomo = 1.f;
 		float OrigArm = 1800.f;
 		FRotator OrigCamRot = FRotator::ZeroRotator;
@@ -495,7 +500,7 @@ namespace
 		Find.Tick = [](float) { return true; };
 		D.Steps.Add(MoveTemp(Find));
 
-		for (UWeaponData* Weapon : { D.Garand, D.M1919, D.MG42 })
+		for (UWeaponData* Weapon : D.StatsWeapons)
 		{
 			struct FTrial
 			{
@@ -645,7 +650,7 @@ namespace
 		Find.Tick = [](float) { return true; };
 		D.Steps.Add(MoveTemp(Find));
 
-		for (UWeaponData* Weapon : { D.Garand, D.M1919, D.MG42 })
+		for (UWeaponData* Weapon : D.StatsWeapons)
 		{
 			struct FRun { float StartAt = -1.f; float Shocked = -1.f; float Arrived = -1.f; float Hit1 = -1.f; float MaxStress = 0.f; int32 CellsCrossed = 0; };
 			TSharedRef<FRun> Run = MakeShared<FRun>();
@@ -770,6 +775,7 @@ namespace
 		}
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Bot"))) { V->Set(D.PrevBot); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.VPWinTime"))) { V->Set(D.PrevVPWinTime); }
+		if (IConsoleVariable* V = FindVar(TEXT("squad.MatchTime"))) { V->Set(D.PrevMatchTime); }
 		Exec(D, *FString::Printf(TEXT("slomo %g"), D.PrevSlomo));
 		APawn* Pawn = nullptr;
 		if (USpringArmComponent* Arm = CameraArm(D, Pawn))
@@ -847,6 +853,7 @@ namespace
 		const FString Mode = Args.Num() > 0 ? Args[0].ToLower() : TEXT("all");
 		const bool bTerrain = Mode == TEXT("all") || Mode == TEXT("terrain");
 		const bool bStats = Mode == TEXT("all") || Mode == TEXT("stats");
+		const bool bSmg = Mode == TEXT("smg"); // GDD §6.2: submachine guns against the rifle at close quarters.
 
 		TSharedPtr<FDemo> New = MakeShared<FDemo>();
 		FDemo& D = *New;
@@ -857,10 +864,20 @@ namespace
 		D.Garand = LoadObject<UWeaponData>(nullptr, TEXT("/Game/Data/DA_M1Garand.DA_M1Garand"));
 		D.M1919 = LoadObject<UWeaponData>(nullptr, TEXT("/Game/Data/DA_M1919.DA_M1919"));
 		D.MG42 = LoadObject<UWeaponData>(nullptr, TEXT("/Game/Data/DA_MG42.DA_MG42"));
-		if (!D.Garand || !D.M1919 || !D.MG42)
+		D.Thompson = LoadObject<UWeaponData>(nullptr, TEXT("/Game/Data/DA_Thompson.DA_Thompson"));
+		D.MP40 = LoadObject<UWeaponData>(nullptr, TEXT("/Game/Data/DA_MP40.DA_MP40"));
+		if (!D.Garand || !D.M1919 || !D.MG42 || (bSmg && (!D.Thompson || !D.MP40)))
 		{
-			UE_LOG(LogSquadDemo, Warning, TEXT("DemoMG: missing weapon data (DA_M1Garand / DA_M1919 / DA_MG42)."));
+			UE_LOG(LogSquadDemo, Warning, TEXT("DemoMG: missing weapon data (DA_M1Garand / DA_M1919 / DA_MG42 / DA_Thompson / DA_MP40)."));
 			return;
+		}
+		if (bSmg)
+		{
+			D.StatsWeapons = { D.Garand, D.Thompson, D.MP40 };
+		}
+		else
+		{
+			D.StatsWeapons = { D.Garand, D.M1919, D.MG42 };
 		}
 		for (TActorIterator<ASoldier> It(World); It; ++It)
 		{
@@ -890,6 +907,7 @@ namespace
 		}
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Bot"))) { D.PrevBot = V->GetInt(); V->Set(0); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.VPWinTime"))) { D.PrevVPWinTime = V->GetFloat(); V->Set(100000.f); }
+		if (IConsoleVariable* V = FindVar(TEXT("squad.MatchTime"))) { D.PrevMatchTime = V->GetFloat(); V->Set(-1.f); }
 		if (AWorldSettings* WS = World->GetWorldSettings()) { D.PrevSlomo = WS->TimeDilation; }
 		APawn* Pawn = nullptr;
 		if (USpringArmComponent* Arm = CameraArm(D, Pawn))
@@ -933,6 +951,21 @@ namespace
 			}
 			AddCrossingTrials(D);
 		}
+		if (bSmg)
+		{
+			AddCsvHeader(D);
+			FStep Speed; Speed.Name = TEXT("SMG statistics (4x speed)");
+			Speed.Begin = [&D]() { Exec(D, TEXT("slomo 4")); };
+			Speed.Tick = [](float) { return true; };
+			D.Steps.Add(MoveTemp(Speed));
+			for (ECoverType Cover : { ECoverType::None, ECoverType::Soft, ECoverType::LowWall })
+			{
+				for (int32 Range : { 4, 8, 12, 20 })
+				{
+					AddStatsTrials(D, Cover, Range);
+				}
+			}
+		}
 		Demo = New;
 		ActiveDemo = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&TickDemo));
 		UE_LOG(LogSquadDemo, Log, TEXT("DemoMG: started (%s, %d steps, %.0f s trials). Output: %s"), *Mode, D.Steps.Num(), D.TrialTime, *D.OutDir);
@@ -951,7 +984,8 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs CmdDemoMG(
 		TEXT("squad.DemoMG"),
-		TEXT("squad.DemoMG [terrain|stats|all=all] [trial seconds=40]: machine-gun demo (GDD §6.1). terrain: your soldier 2 sets the M1919 "
+		TEXT("squad.DemoMG [terrain|stats|smg|all=all] [trial seconds=40]: machine-gun demo (GDD §6.1). smg (not in all): M1 Garand vs "
+			 "Thompson vs MP 40 at 4 / 8 / 12 / 20 m, exposed / hay / low wall (GDD §6.2). terrain: your soldier 2 sets the M1919 "
 			 "(then the MG 42) up on open ground, hay, a low wall and a window and fires. stats: M1 Garand vs M1919 vs MG 42 against an "
 			 "invulnerable target at 6 / 15 / 30 m, exposed / hay / low wall, plus a crossing run. Results in Saved/Demo/MG."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&StartDemo),

@@ -19,6 +19,8 @@ struct FBallisticRound
 	FVector Position = FVector::ZeroVector;
 	FVector Direction = FVector::ForwardVector;
 	float Travelled = 0.f;
+	/** The firing weapon's StressScale (GDD §6.2), taken when the round was fired. */
+	float StressScale = 1.f;
 	/** The hit-chance estimate when the round was fired (stats, kill feed). */
 	FHitChanceInfo Chance;
 	/** Soldiers already stressed by this round passing them. */

@@ -39,6 +39,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Victory Point")
 	bool bDownedSoldiersCount = false;
 
+	/** GDD §11: points per minute its owner earns while owning it (contested still counts). Raise it to make a VP worth fighting for. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Victory Point", meta = (ClampMin = "0"))
+	float PointsPerMinute = 2.f;
+
 	/** Seconds between the server's checks of who is in the zone. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Victory Point", meta = (ClampMin = "0.05"))
 	float CheckInterval = 0.2f;

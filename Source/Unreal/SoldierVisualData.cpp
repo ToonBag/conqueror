@@ -22,6 +22,7 @@ namespace
 		TEXT("A_Death_Stand"), TEXT("A_Death_Prone"),
 		TEXT("A_Throw_StepBack_Stand"), TEXT("A_Throw_StepBack_Crouch"), TEXT("A_Throw_StepBack_Prone"),
 		TEXT("A_Throw_Armed_Stand"), TEXT("A_Throw_Armed_Crouch"), TEXT("A_Throw_Armed_Prone"),
+		TEXT("A_Cover_Peek_R_Stand_Fire"), TEXT("A_Cover_Peek_L_Stand_Fire"), TEXT("A_Cover_Peek_R_Crouch_Fire"), TEXT("A_Cover_Peek_L_Crouch_Fire"),
 	};
 	static_assert(UE_ARRAY_COUNT(ClipAssetNames) == static_cast<int32>(ESoldierClip::Num), "One asset name per ESoldierClip");
 }

@@ -2,6 +2,7 @@
 
 #include "Soldier.h"
 #include "VictoryPoint.h"
+#include "SquadGameState.h"
 #include "WeaponData.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
@@ -134,6 +135,8 @@ void USquadMatchStats::OnMatchStarted(int32 Seed, int32 SquadsPerTeam)
 	Soldiers.Reset();
 	ShotRows.Reset();
 	Events.Reset();
+	TrackRows.Reset();
+	TrackRows.Add(TEXT("time,soldier,team,x,y,stance,moving,leaning_on_cover,spotted,under_fire,state"));
 	ShotRows.Add(TEXT("time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,shooter_braced,target_injured,exposure_pct,hit_part,hit,outcome"));
 	for (TActorIterator<ASoldier> It(World); It; ++It)
 	{
@@ -148,10 +151,11 @@ void USquadMatchStats::Tick(float DeltaTime)
 	{
 		return;
 	}
-	// Stress tiers, sampled every half second (GDD §8.1).
+	// Stress tiers (GDD §8.1) and the position track, sampled every half second.
 	SampleAccumulator += DeltaTime;
 	if (SampleAccumulator >= 0.5f)
 	{
+		const float Now = MatchTime();
 		for (FSoldierRecord& R : Soldiers)
 		{
 			const ASoldier* S = R.Soldier.Get();
@@ -159,6 +163,11 @@ void USquadMatchStats::Tick(float DeltaTime)
 			{
 				R.TierSeconds[static_cast<int32>(S->GetStressTier())] += SampleAccumulator;
 				R.PeakStress = FMath::Max(R.PeakStress, S->GetStress());
+				const FIntPoint Cell = S->GetCurrentCell();
+				const TCHAR* State = S->IsInjured() ? TEXT("injured") : S->IsDowned() ? TEXT("stunned") : TEXT("active");
+				TrackRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%d,%d,%s,%d,%d,%d,%d,%s"), Now, *R.Id, TeamName(R.Team), Cell.X, Cell.Y,
+					StanceName(S->GetEffectiveStance()), S->IsMoving() ? 1 : 0, S->IsLeaningOnCover() ? 1 : 0,
+					S->IsSpottedByEnemy() ? 1 : 0, S->IsUnderFire() ? 1 : 0, State));
 			}
 		}
 		SampleAccumulator = 0.f;
@@ -391,7 +400,24 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 	Root->SetNumberField(TEXT("squads_per_team"), NumSquadsPerTeam);
 	Root->SetNumberField(TEXT("duration_s"), MatchTime());
 	Root->SetStringField(TEXT("reason"), Reason);
-	Root->SetStringField(TEXT("winner"), Reason == TEXT("draw") || Reason == TEXT("timeout") ? TEXT("none") : TeamName(Winner));
+	Root->SetStringField(TEXT("winner"), Reason == TEXT("draw") || Reason == TEXT("time_draw") || Reason == TEXT("timeout") ? TEXT("none") : TeamName(Winner));
+
+	// Points (GDD §11), per team.
+	if (const ASquadGameState* GS = World ? World->GetGameState<ASquadGameState>() : nullptr)
+	{
+		TSharedRef<FJsonObject> Score = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> KillPts = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> VPPts = MakeShared<FJsonObject>();
+		for (const ESquadTeam Team : { ESquadTeam::Allies, ESquadTeam::Axis })
+		{
+			Score->SetNumberField(TeamName(Team), GS->GetScore(Team));
+			KillPts->SetNumberField(TeamName(Team), GS->GetKillPoints(Team));
+			VPPts->SetNumberField(TeamName(Team), FMath::RoundToDouble(static_cast<double>(GS->GetVPPoints(Team)) * 10.0) / 10.0);
+		}
+		Root->SetObjectField(TEXT("score"), Score);
+		Root->SetObjectField(TEXT("kill_points"), KillPts);
+		Root->SetObjectField(TEXT("vp_points"), VPPts);
+	}
 
 	// VP owners at the end.
 	TSharedRef<FJsonObject> VPs = MakeShared<FJsonObject>();
@@ -487,7 +513,8 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 	const FString Dir = FPaths::ProjectSavedDir() / TEXT("MatchStats");
 	const FString Base = Dir / FString::Printf(TEXT("%s_seed%d"), *StartStamp, MatchSeed);
 	const bool bJson = FFileHelper::SaveStringToFile(Json, *(Base + TEXT(".json")));
-	const bool bCsv = FFileHelper::SaveStringArrayToFile(ShotRows, *(Base + TEXT("_shots.csv")));
+	const bool bCsv = FFileHelper::SaveStringArrayToFile(ShotRows, *(Base + TEXT("_shots.csv")))
+		&& FFileHelper::SaveStringArrayToFile(TrackRows, *(Base + TEXT("_track.csv")));
 	UE_LOG(LogSquadStats, Log, TEXT("MATCH STATS: %s, %.0f s, %d shots -> %s.json%s"), *Reason, MatchTime(), ShotRows.Num() - 1, *Base,
 		bJson && bCsv ? TEXT("") : TEXT(" (WRITE FAILED)"));
 }

@@ -240,7 +240,33 @@ def solve(P):
     M["ik_hand_gun"] = G @ GUN_TO_IKGUN
     for n in ORDER:
         if n not in M: M[n] = inherit(n, M)
+    if P.get("mirror"):
+        return mirror_solved(M, G)
     return M, G
+
+
+# Left-right mirror (character right = Blender -X): a pose with mirror=1 is solved as authored, then reflected, so the
+# rifle goes to the left shoulder with the left hand on the grip (GDD §9.2, leaning out left past a wall's edge).
+MIRROR_X = Matrix.Scale(-1.0, 4, Vector((1, 0, 0)))
+RIFLE_FLIP_Y = Matrix.Scale(-1.0, 4, Vector((0, 1, 0)))       # keeps the reflected rifle a proper rotation
+
+
+def mirror_partner(n):
+    for a, b in (("_l", "_r"), ("_r", "_l")):
+        if n.endswith(a) and n[:-2] + b in REST: return n[:-2] + b
+    return n
+
+
+def mirror_solved(M, G):
+    out = {}
+    for n in ORDER:
+        m = mirror_partner(n)
+        # Reflect the partner's world matrix, then undo the reflection in its rest frame: proper, and the rest pose
+        # maps to itself on a symmetric skeleton.
+        out[n] = MIRROR_X @ M[m] @ (MIRROR_X @ REST[m]).inverted() @ REST[n]
+    G2 = MIRROR_X @ G @ RIFLE_FLIP_Y
+    out["ik_hand_gun"] = G2 @ GUN_TO_IKGUN
+    return out, G2
 
 
 def basis_of(n, M):
@@ -566,7 +592,10 @@ COVER_HIGH_CROUCH["gun"] = (0.42, 0.20, 0.62, 5, -60, 0)
 
 
 def peek(aim, side):
-    s = 1 if side == "R" else -1
+    """Leaning out past a wall's edge. "R": right shoulder, leaning right. "L": the mirror image (left shoulder)."""
+    if side == "L":
+        return put(peek(aim, "R"), mirror=1)
+    s = 1
     return add(aim, pelvis=(0.25, 0.18 * s, -0.02), pelvis_rot=(0, 6 * s, 0), sp1=(0, 6 * s, 0), sp2=(0, 8 * s, 0),
                sp3=(0, 6 * s, 0), neck=(0, -8 * s, 0), head=(0, -6 * s, 0), gun=(0.25, 0.30 * s, -0.04, 0, 0, 12 * s),
                foot_l=(0.30, 0.10 * s, 0, 0, 0, 0), foot_r=(0.20, 0.14 * s, 0, 0, 0, 0))
@@ -659,6 +688,10 @@ CLIPS = {
     "A_Cover_Peek_L_Stand":  (breathe(peek(STAND_AIM, "L"), 0.5), 3.0, True),
     "A_Cover_Peek_R_Crouch": (breathe(peek(CROUCH_AIM, "R"), 0.5), 3.0, True),
     "A_Cover_Peek_L_Crouch": (breathe(peek(CROUCH_AIM, "L"), 0.5), 3.0, True),
+    "A_Cover_Peek_R_Stand_Fire":  (fire(peek(STAND_AIM, "R")), 0.4, False),
+    "A_Cover_Peek_L_Stand_Fire":  (fire(peek(STAND_AIM, "L")), 0.4, False),
+    "A_Cover_Peek_R_Crouch_Fire": (fire(peek(CROUCH_AIM, "R")), 0.4, False),
+    "A_Cover_Peek_L_Crouch_Fire": (fire(peek(CROUCH_AIM, "L")), 0.4, False),
     "A_Stunned":           (lambda t: add(STUNNED, sp3=(1.5 * math.sin(2 * math.pi * 1.5 * t), 0, 0), head=(0, 0, 3 * math.sin(math.pi * t))), 2.0, True),
     "A_Injured_Idle":      (breathe(INJURED, 1.6, 1.5), 3.0, True),
     "A_Injured_Crawl":     (prone_crawl(0.79, 2.0), 2.0, True),
@@ -836,7 +869,7 @@ def main(argv):
         bpy.data.objects.remove(r, do_unlink=True)
         bpy.ops.wm.save_as_mainfile(filepath=ANIM_BLEND, copy=True)
     if "--no-preview" not in argv:
-        V = (35, 8, float(os.environ.get("PV_DIST", 3.6)), float(os.environ.get("PV_U", 0.85))); VP = (60, 25, 3.2, 0.4); VS = (90, 5, 3.4, 0.85)
+        V = (float(os.environ.get("PV_AZ", 35)), 8, float(os.environ.get("PV_DIST", 3.6)), float(os.environ.get("PV_U", 0.85))); VP = (60, 25, 3.2, 0.4); VS = (90, 5, 3.4, 0.85)
         sheet = os.path.join(PREVIEW_DIR, "soldier_anim_sheet_%s.png" % ("all" if only is None else "sel"))
         shots = []
         for nm in names:

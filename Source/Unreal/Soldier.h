@@ -865,8 +865,8 @@ public:
 	/** Server: a round fired by this soldier stopped (or ran out of range). Applies hits, stats and the tracer. */
 	void OnBallisticRoundResolved(const FBallisticRound& Round, const FBallisticTrace& Hit);
 
-	/** Server: an enemy round passed close by (GDD §16 stress). */
-	void OnBallisticNearMiss(const ASoldier* Shooter);
+	/** Server: an enemy round passed close by (GDD §16 stress), scaled by the firing weapon's StressScale. */
+	void OnBallisticNearMiss(const ASoldier* Shooter, float StressScale);
 
 protected:
 	virtual void BeginPlay() override;

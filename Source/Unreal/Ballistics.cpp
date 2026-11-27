@@ -6,6 +6,7 @@
 #include "GridManager.h"
 #include "HAL/IConsoleManager.h"
 #include "SquadGameState.h"
+#include "WeaponData.h"
 
 namespace
 {
@@ -142,6 +143,7 @@ void UBallisticsSubsystem::FireRound(ASoldier* Shooter, ASoldier* Target, const 
 	Round.Position = Muzzle;
 	Round.Direction = Direction;
 	Round.Chance = Chance;
+	Round.StressScale = Shooter ? Shooter->GetWeaponData()->StressScale : 1.f;
 }
 
 void UBallisticsSubsystem::Tick(float DeltaTime)
@@ -211,7 +213,7 @@ void UBallisticsSubsystem::StressNearMisses(FBallisticRound& Round, const FVecto
 		if (PointSegmentDistance(S->GetActorLocation() + FVector(0.f, 0.f, 90.f), From, Seg) <= Radius)
 		{
 			Round.Stressed.Add(Weak);
-			S->OnBallisticNearMiss(Round.Shooter.Get());
+			S->OnBallisticNearMiss(Round.Shooter.Get(), Round.StressScale);
 		}
 	}
 }

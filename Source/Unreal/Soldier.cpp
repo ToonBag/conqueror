@@ -10,6 +10,7 @@
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
 #include "SquadGameState.h"
+#include "SquadGameMode.h"
 #include "SquadMatchStats.h"
 #include "SquadPlayerController.h"
 #include "SquadPlayerState.h"
@@ -1129,6 +1130,10 @@ void ASoldier::Die(const FKillCause& Cause)
 			Entry.ChancePercent = Cause.ChancePercent;
 			Entry.bBledOut = Cause.bBledOut;
 			GameState->AddKill(Entry);
+		}
+		if (ASquadGameMode* GameMode = GetWorld()->GetAuthGameMode<ASquadGameMode>())
+		{
+			GameMode->OnSoldierDied(*this); // Points for the other team (GDD §11).
 		}
 		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
 		{
@@ -2939,13 +2944,20 @@ bool ASoldier::GetActivePeek(FWallPeek& OutPeek) const
 		return false;
 	}
 	// Edge is a grid step out past the wall's end; grid X/Y run along world X/Y. With both sides of a wall's end
-	// open, lean out the side the soldier is turned towards.
+	// open, lean out the side the soldier is turned towards (rifle on that shoulder); squarely facing the wall, the
+	// right (the right-shoulder default).
 	const FVector Forward = GetActorForwardVector();
+	const FVector Right = GetActorRightVector();
+	auto Score = [&Forward, &Right](const FWallPeek& Peek)
+	{
+		const FVector Edge(Peek.Edge.X, Peek.Edge.Y, 0.f);
+		const float Toward = FVector::DotProduct(Edge, Forward);
+		return (FMath::Abs(Toward) < 0.01f ? 0.f : Toward) + 0.001f * FVector::DotProduct(Edge, Right);
+	};
 	const FWallPeek* Chosen = &Peeks[0];
 	for (const FWallPeek& Peek : Peeks)
 	{
-		if (FVector::DotProduct(FVector(Peek.Edge.X, Peek.Edge.Y, 0.f), Forward)
-			> FVector::DotProduct(FVector(Chosen->Edge.X, Chosen->Edge.Y, 0.f), Forward) + KINDA_SMALL_NUMBER)
+		if (Score(Peek) > Score(*Chosen))
 		{
 			Chosen = &Peek;
 		}
@@ -3072,10 +3084,11 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 	}
 	MulticastShot(Muzzle, Impact, bHit); // Tracer and gunshot on every machine.
 
-	// GDD §8.2: every round fired at a soldier stresses it, hit or miss; cover reduces that (§9).
+	// GDD §8.2: every round fired at a soldier stresses it, hit or miss, scaled by the weapon (§6.2); cover reduces
+	// that (§9).
 	const USoldierData* D = GetSoldierData();
 	const float CoverFactor = FMath::Clamp(1.f - Chance.CoverReduction / 100.f * D->CoverStressReductionScale, 0.f, 1.f);
-	Target->AddStress(Target->GetSoldierData()->StressPerIncomingShot * CoverFactor);
+	Target->AddStress(Target->GetSoldierData()->StressPerIncomingShot * GetWeaponData()->StressScale * CoverFactor);
 	Target->UnderFireRemaining = UnderFireTime;
 	ApplyCrossfireStress(Target);
 

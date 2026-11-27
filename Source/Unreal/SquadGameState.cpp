@@ -13,6 +13,36 @@ void ASquadGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(ASquadGameState, WinningTeam);
 	DOREPLIFETIME(ASquadGameState, VictoryReason);
 	DOREPLIFETIME(ASquadGameState, bBallistics);
+	DOREPLIFETIME(ASquadGameState, KillPoints);
+	DOREPLIFETIME(ASquadGameState, VPPoints);
+	DOREPLIFETIME(ASquadGameState, MatchElapsed);
+	DOREPLIFETIME(ASquadGameState, MatchTimeLimit);
+}
+
+void ASquadGameState::AddKillPoints(ESquadTeam Team, float Points)
+{
+	if (HasAuthority() && !IsMatchOver())
+	{
+		KillPoints[TeamIndex(Team)] += Points;
+		ForceNetUpdate();
+	}
+}
+
+void ASquadGameState::AddVPPoints(ESquadTeam Team, float Points)
+{
+	if (HasAuthority() && !IsMatchOver())
+	{
+		VPPoints[TeamIndex(Team)] += Points;
+	}
+}
+
+void ASquadGameState::SetMatchClock(float Elapsed, float Limit)
+{
+	if (HasAuthority())
+	{
+		MatchElapsed = Elapsed;
+		MatchTimeLimit = FMath::Max(0.f, Limit);
+	}
 }
 
 void ASquadGameState::AddKill(const FKillFeedEntry& Entry)

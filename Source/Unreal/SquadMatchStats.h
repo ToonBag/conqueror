@@ -111,6 +111,8 @@ private:
 	/** One CSV row per shot; the last row's outcome is filled in by RecordHitOutcome. */
 	TArray<FString> ShotRows;
 	int32 PendingOutcomeRow = INDEX_NONE;
+	/** One CSV row per living soldier every half second: where it is and what it is doing (rush analysis, GDD §11.2). */
+	TArray<FString> TrackRows;
 	TArray<FString> Events;
 	/** Per blast-causing thrower: blasts that hit enemies / friends. */
 	int32 GrenadesThrownTotal[2] = { 0, 0 };

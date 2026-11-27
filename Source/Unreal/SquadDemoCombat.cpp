@@ -128,6 +128,7 @@ namespace
 		int32 PrevBot = 1;
 		int32 PrevBallistics = 0;
 		float PrevVPWinTime = 0.f;
+		float PrevMatchTime = 0.f;
 	};
 
 	FTSTicker::FDelegateHandle ActiveDemo;
@@ -616,6 +617,7 @@ namespace
 		}
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Bot"))) { V->Set(D.PrevBot, ECVF_SetByConsole); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.VPWinTime"))) { V->Set(D.PrevVPWinTime, ECVF_SetByConsole); }
+		if (IConsoleVariable* V = FindVar(TEXT("squad.MatchTime"))) { V->Set(D.PrevMatchTime, ECVF_SetByConsole); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Ballistics"))) { V->Set(D.PrevBallistics, ECVF_SetByConsole); }
 		UE_LOG(LogSquadDemoCombat, Log, TEXT("DemoCombat: %s. Output: %s_*.csv"), bCompleted ? TEXT("done") : TEXT("stopped early"), *D.OutBase);
 		if (D.bQuit)
@@ -775,6 +777,7 @@ namespace
 		}
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Bot"))) { D.PrevBot = V->GetInt(); V->Set(0, ECVF_SetByConsole); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.VPWinTime"))) { D.PrevVPWinTime = V->GetFloat(); V->Set(1000000.f, ECVF_SetByConsole); }
+		if (IConsoleVariable* V = FindVar(TEXT("squad.MatchTime"))) { D.PrevMatchTime = V->GetFloat(); V->Set(-1.f, ECVF_SetByConsole); }
 		if (IConsoleVariable* V = FindVar(TEXT("squad.Ballistics"))) { D.PrevBallistics = V->GetInt(); }
 
 		const FString Dir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Demo"), TEXT("Combat"));
