@@ -5,7 +5,7 @@
 #include "BallisticsData.generated.h"
 
 /**
- * Tuning for the experimental projectile combat model (GDD §16, squad.Ballistics 1). Every rifle round is a
+ * Tuning for the projectile combat model (GDD §16, squad.Ballistics 1). Every rifle round is a
  * server-simulated projectile that leaves the muzzle with a random angular error (spread) and stops on the
  * ground, on cover or on a soldier's hit shapes. Cover protects by physically hiding body parts.
  *

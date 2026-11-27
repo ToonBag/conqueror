@@ -30,7 +30,7 @@ struct FBallisticRound
 };
 
 /**
- * Experimental projectile combat (GDD §16), switched on with squad.Ballistics 1 on the server. Every rifle round
+ * Projectile combat (GDD §16), the default combat model (squad.Ballistics 1 on the server; 0 for hit-chance rolls). Every rifle round
  * is simulated here as a fast projectile, stepped each server tick, and stops on the ground, on cover (the grid's
  * cover cells, using the same slab shapes and heights as grenades) or on a soldier's analytic hit shapes.
  *

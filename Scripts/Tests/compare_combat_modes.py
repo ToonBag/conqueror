@@ -2,7 +2,7 @@
 
 Inputs:
   * firing-range demo output (squad.DemoCombat, Scripts/CombatModeDemo.ps1): Saved/Demo/Combat/DemoCombat_*_{trials,engagements,shots}.csv
-  * AI test matches (Scripts/AIMatchBatch.ps1 with and without -Ballistics): two folders of *.json + *_shots.csv
+  * AI test matches (Scripts/AIMatchBatch.ps1 with -Rolls and without): two folders of *.json + *_shots.csv
 
 Run with the engine's bundled Python:
   "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/ThirdParty/Python3/Win64/python.exe" -I Scripts/Tests/compare_combat_modes.py \

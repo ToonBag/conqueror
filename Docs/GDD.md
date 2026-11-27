@@ -1,7 +1,9 @@
 # SQUAD COMMAND
 
 **World War II Real-Time Strategy — Game Design Document**
-Version 0.66 | Unreal Engine 5.8.4 | Steam Multiplayer
+Version 0.67 | Unreal Engine 5.8.4 | Steam Multiplayer
+
+> **Changelog (v0.67):** **Projectile combat is now the game's combat model** (§16, §5.3, §9.1). `squad.Ballistics` defaults to **1**: every rifle, submachine-gun and machine-gun round is simulated on the server, and cover protects by physically hiding the body instead of by flat percentages. The hit-chance roll stays behind `squad.Ballistics 0` for comparison (`AIMatchBatch.ps1 -Rolls`, `WatchAIMatch.ps1 -Rolls`; the old `-Ballistics` switch is gone). §16 is no longer marked experimental. In 20 4v4 bot matches with the v0.66 bots (sides swapped in half): wins 10-10, every match decided, 28% of rounds hit (rolls: about 65%), half the deaths by 66 s (rolls with the same bots: 43 s; with the old bots: 20 s), and rush success fell to 32%, so charging across open ground now loses more often than it wins (§11.2). No numbers changed.
 
 > **Changelog (v0.66):** Smarter play-test bot (§11.1; AI only, no rule changes). Bots used to walk their soldiers straight to the VPs and fight wherever they stopped, so 95% of shots were at soldiers in the open and fights were over in about 20 s. They now advance from cover to cover in **bounds** (up to 12 m, or 7 m near a VP they don't hold or in contact) and pause in cover between them, with half the squad covering the other half once contact is expected. A soldier crosses ground an enemy can see only while that enemy is pinned (under fire or badly stressed); medics wait the same way. A soldier caught in the open under fire breaks for the nearest cover, a badly stressed one behind hay or a low wall goes prone until it recovers, and one that can't hit an enemy in cover moves round to a cell that cover doesn't protect (one flanker per squad at a time). Slots in a VP favour cells that can see the enemy. Bots now notice an enemy the team spots off screen after 1.5–3 s, because the minimap shows it. Bots stand a prone soldier up before moving it (a soldier treated with a medkit used to crawl for the rest of the match). Measured over 20 4v4 matches (`Docs/Balancing/2026-11-27_bot_tactics/`): shots at targets in the open 95% → 78%, half the deaths by 43 s (was 23 s), shots within 5 m 22% → 6%. New bot tuning on `ASquadBot` (Advance, Flank and Cover categories).
 
@@ -293,6 +295,8 @@ A squad must stay together: its two furthest-apart living soldiers may never be 
 
 ### 5.3 Hit Chance Calculation
 
+> **Combat model (v0.67):** rifle, submachine-gun and machine-gun fire now uses **projectile combat (§16)** by default: each round is simulated and cover protects by hiding the body. The hit-chance roll below, and the flat cover reductions of §9.1, apply only with `squad.Ballistics 0`, kept for comparison. Range bands, maximum ranges, aim and fire times, automatic targeting and the stress tiers below still apply in both models.
+
 Every shot fired resolves through a hit chance calculation that combines all relevant attacker and defender factors into a single percentage value. This value is then tested against a random roll to determine whether the shot connects.
 
 - **Range Bands:** The weapon's Short / Mid / Long accuracy (§6) applies to targets up to **8 m / 20 m / 40 m** away. Soldiers cannot fire at targets beyond 40 m. The bands are per rifle (`ShortRangeMax`, `MidRangeMax`, `LongRangeMax` in its weapon data asset); both rifles and both machine guns use the same bands. Submachine guns have shorter bands (**8 m / 15 m / 25 m**, §6.2) and can't fire beyond 25 m.
@@ -500,7 +504,7 @@ Soldiers can occupy cover positions on the map. Cover reduces incoming hit proba
 
 ### 9.1 Cover Protection Values
 
-Incoming fire hit chances are reduced by the following flat percentages:
+With projectile combat (the default, §16) cover protects by physically stopping rounds; these flat reductions apply only with `squad.Ballistics 0` (hit-chance rolls, §5.3). Incoming fire hit chances are then reduced by the following flat percentages:
 
 - **Soft Cover (Hay Bales):** 30% reduction.
 - **Low Wall / Half Wall:** 50% reduction.
@@ -702,7 +706,7 @@ Bot-only matches on a dedicated server with no clients, recorded for balancing. 
 - `squad.MatchStats 1` — the server writes `Saved/MatchStats/<time>_seed<n>.json` (result, per-soldier and per-team totals, events) and `_shots.csv` (every shot: positions, range, stance, cover, hit chance, roll, result).
 - `squad.MatchTimeLimit <s>` ends the record as a timeout; `squad.QuitAfterMatch 1` closes the server after writing it. The batch script turns the real match time limit off (`squad.MatchTime -1`) so batches compare with earlier reviews; `AIMatchBatch.ps1 -PointsTimeLimit <s>` turns it on, and the record then carries each team's `score`, `kill_points` and `vp_points` (§11.3).
 - `squad.SwapSides 1` — each faction starts in the other's deployment zone with its own rifles (tells a map-side bias from a faction bias).
-- `squad.Ballistics 1` (`AIMatchBatch.ps1 -Ballistics`) — experimental projectile combat (§16). Shot rows then carry the estimated chance, a roll of -1 and where the round went; the JSON adds friendly-fire, stray-hit, rounds-stopped-by-cover and hit-part counts per team.
+- Combat model: projectile combat (§16) by default; `AIMatchBatch.ps1 -Rolls` (`squad.Ballistics 0`) runs the older hit-chance rolls. In projectile matches shot rows carry the estimated chance, a roll of -1 and where the round went; the JSON adds friendly-fire, stray-hit, rounds-stopped-by-cover and hit-part counts per team.
 - Shot rows also record whether the shooter was braced, whether the target was already injured when the round arrived (so a kill can be told apart as outright, within 5 m, or finishing off), and in the projectile model the target's exposure and the body part hit.
 - **Position track and rushes:** each record also writes `_track.csv`: every living soldier's cell, stance, whether it is moving, leaning on cover, spotted by the enemy or under fire, and its state (active / stunned / injured), every 0.5 s. From it `analyze_match_stats.py` finds **approaches**: a soldier closing from over 15 m to within 10 m of the nearest active enemy in 15 s or less, having done at least half the closing itself. An approach is a **rush** if the soldier was moving for 60% of it and spotted for 50% of it (charging across open ground), otherwise **covered**. It is **won** if the soldier injures or kills an enemy between the start of the approach and 20 s after arriving, before going down itself, and **lost** if it is injured, stunned or killed first. **Rush success** = won / (won + lost). Above 50% means charging pays, the failure Divided We Fall's reviewers described (`Docs/Predecessors.md`). Track it in every balancing review, next to the covered-approach win rate. Grenade stuns are not credited; the thresholds are constants at the top of the script. The same tracks give an **Exposure** table: the share of active soldiers' time spent seen by the enemy, seen in the open, seen while moving and under fire, which shows how much the bots use cover.
 - `squad.TuningOverrides "Prop=Value;Prop=Value"` (`AIMatchBatch.ps1 -Tuning`) — sets properties of the soldier, weapon and projectile data assets in memory for that server, to trial tuning values without editing the assets. `Scripts/Tests/compare_trials.py` puts several trials (each run with and without `-SwapSides`) side by side: results, death times, rounds fired, stress reached, grenades and medkits.
@@ -913,9 +917,9 @@ Because the game relies on deterministic grid movement, true RNG shot calculatio
 - Additional Maps & further Cover Destruction (weakened walls that can be breached are in, §9.4; destroying other cover such as hay bales, low walls or trees is not).
 - Spectator Mode & Replay System (Unreal's built-in Replay/DemoNetDriver is a candidate).
 
-## 16. Experimental: Projectile Combat (prototype)
+## 16. Projectile Combat (default combat model)
 
-_Prototype on the `ballistics-prototype` branch, off by default. With the server cvar `squad.Ballistics 1` it replaces the hit-chance roll (§5.3) and the flat cover reductions (§9.1) for rifle and machine-gun fire; everything else (sight lines §9.3, movement, grenades, stress tiers, injuries) is unchanged. All values are starting points for tuning and live in `UBallisticsData` (spread multipliers, posture, flight, friendly fire) and `UWeaponData::SpreadMrad`._
+_The game's combat model since v0.67 (server cvar `squad.Ballistics`, default **1**; 0 brings back the hit-chance rolls of §5.3 for comparison). It replaces the hit-chance roll (§5.3) and the flat cover reductions (§9.1) for rifle and machine-gun fire; everything else (sight lines §9.3, movement, grenades, stress tiers, injuries) is unchanged. All values are starting points for tuning and live in `UBallisticsData` (spread multipliers, posture, flight, friendly fire) and `UWeaponData::SpreadMrad`._
 
 ### 16.1 Rounds
 
@@ -955,7 +959,7 @@ _Prototype on the `ballistics-prototype` branch, off by default. With the server
 ### 16.6 Open questions
 
 - Spread values per weapon (machine guns currently use the rifle value).
-- Injured-only stalemates (§11.2 review) happen more often: 6 of 20 test matches timed out, against 2 of 20 with hit-chance rolls on the same seeds. Prone soldiers behind cover are hard to hit.
+- Injured-only stalemates (§11.2 review) happened more often than with rolls (6 of 20 test matches timed out, against 2 of 20). Bleed-out (v0.54) and the points victory on a time limit (v0.61) now end every match; prone soldiers behind cover are still hard to hit.
 - Whether soldiers should stay braced while being shot at, or duck on their own under heavy fire.
 - A prone shooter about 4 m from a low wall or window still has line of sight to a soldier braced behind it, but nothing of that soldier is exposed to its muzzle (the estimate shows 0%) and every round hits the wall. Automatic targeting skips such a target; an explicit attack order fires anyway. Decide whether line of sight should account for muzzle height, or the attack order should refuse ("NO CLEAR SHOT").
 

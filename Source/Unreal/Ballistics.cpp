@@ -11,9 +11,9 @@
 namespace
 {
 	TAutoConsoleVariable<int32> CVarBallistics(
-		TEXT("squad.Ballistics"), 0,
-		TEXT("Server: 1 = experimental projectile combat (GDD §16): every round is a projectile with spread, cover ")
-		TEXT("protects by hiding body parts, soldiers brace on low cover, friendly rounds injure. 0 = hit-chance rolls (GDD §5.3)."),
+		TEXT("squad.Ballistics"), 1,
+		TEXT("Server: 1 (default) = projectile combat (GDD §16): every round is a projectile with spread, cover ")
+		TEXT("protects by hiding body parts, soldiers brace on low cover, friendly rounds injure. 0 = the older hit-chance rolls (GDD §5.3), kept for comparison."),
 		ECVF_Default);
 
 	/** Closest distance from P to the segment A -> A + Seg. */

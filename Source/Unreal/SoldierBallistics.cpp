@@ -1,4 +1,4 @@
-// Experimental projectile combat (GDD §16, squad.Ballistics 1): hit shapes, bracing on cover, spread, firing a
+// Projectile combat (GDD §16, squad.Ballistics 1, the default): hit shapes, bracing on cover, spread, firing a
 // round and applying where it lands. The round itself flies in UBallisticsSubsystem.
 
 #include "Soldier.h"

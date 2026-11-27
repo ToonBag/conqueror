@@ -12,7 +12,7 @@
 .EXAMPLE
   ./Scripts/WatchAIMatch.ps1                         # 4v4 on Farmstead
   ./Scripts/WatchAIMatch.ps1 -SquadsPerTeam 2        # 2v2
-  ./Scripts/WatchAIMatch.ps1 -Ballistics             # projectile combat (GDD §16)
+  ./Scripts/WatchAIMatch.ps1 -Rolls                  # the older hit-chance rolls (projectile combat is the default, GDD §16)
   ./Scripts/WatchAIMatch.ps1 -Seed 1234 -NoReveal    # fixed seed; see only what the Allies see
   ./Scripts/WatchAIMatch.ps1 -Stop                   # close the match
 
@@ -22,7 +22,7 @@ param(
     [int]$SquadsPerTeam = 4,
     [string]$Map = "/Game/Maps/Farmstead",
     [int]$Seed = 0,              # squad.MatchSeed (0: random)
-    [switch]$Ballistics,         # squad.Ballistics 1
+    [switch]$Rolls,              # squad.Ballistics 0: the older hit-chance rolls instead of projectile combat (GDD §5.3, §16)
     [switch]$NoReveal,           # fog of war as the Allies see it, instead of every soldier
     [switch]$NoBuild,
     [switch]$Lag,                # emulated lag / loss on the client
@@ -58,7 +58,7 @@ if (-not $NoBuild) {
 
 $cv = "-ini:Engine:[ConsoleVariables]:"
 $serverArgs = @("${cv}squad.SquadsPerTeam=$SquadsPerTeam", "${cv}squad.BotsKeepSquads=1", "${cv}squad.MinPlayers=1",
-    "${cv}squad.MatchStats=1", "${cv}squad.MatchSeed=$Seed", "${cv}squad.Ballistics=$([int][bool]$Ballistics)")
+    "${cv}squad.MatchStats=1", "${cv}squad.MatchSeed=$Seed", "${cv}squad.Ballistics=$([int](-not $Rolls))")
 $clientArgs = @("${cv}squad.RevealAll=$([int](-not $NoReveal))")
 $mpArgs = @{ Clients = 1; Map = $Map; ServerArgs = $serverArgs; ExtraClientArgs = $clientArgs; EngineRoot = $EngineRoot }
 if ($Lag) { $mpArgs.Lag = $true }
@@ -83,4 +83,4 @@ if ($client -and $client.MainWindowHandle -ne 0) {
     [WatchAIMatch.Win]::ShowWindow($client.MainWindowHandle, 3) | Out-Null   # SW_MAXIMIZE
     [WatchAIMatch.Win]::SetForegroundWindow($client.MainWindowHandle) | Out-Null
 }
-"Watching: $SquadsPerTeam v $SquadsPerTeam bots on $Map$(if ($Ballistics) { ' (projectile combat)' }). Close with: ./Scripts/WatchAIMatch.ps1 -Stop"
+"Watching: $SquadsPerTeam v $SquadsPerTeam bots on $Map$(if ($Rolls) { ' (hit-chance rolls)' }). Close with: ./Scripts/WatchAIMatch.ps1 -Stop"
