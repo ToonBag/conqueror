@@ -235,6 +235,9 @@ private:
 	/** GDD §9.3 / §13: a brief cone of what the soldier can see, flashed when one of the player's soldiers settles into cover. */
 	void UpdateVisionFlashes(ASquadPlayerController& PC);
 	void AddVisionFlashes(ASquadPlayerController& PC, TArray<struct FCanvasUVTri>& Tris);
+	/** One fan of a vision flash: rays from Apex over [FirstYaw, FirstYaw + SpanYaw], each as far as the soldier sees. */
+	void AddVisionFan(const class AGridManager& Grid, const ASoldier& Soldier, const FVector2D& Apex, float FirstYaw, float SpanYaw,
+		float MinReach, float Height, float TargetHeight, float MaxSight, float Now);
 
 	/** Move range edges (world XY segments), rebuilt a few times a second. */
 	TArray<TPair<FVector2D, FVector2D>> MoveRangeEdges;

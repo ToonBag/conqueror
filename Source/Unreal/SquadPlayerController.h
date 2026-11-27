@@ -469,12 +469,18 @@ private:
 	/** Moves the camera over the soldier with this squad number (living or dead). */
 	void CentreCameraOnSquadNumber(int32 Number);
 
+	/** Turns the camera to look from the player's own deployment zone towards the middle of the map. */
+	void FaceCameraFromOwnZone();
+
 	/** Number key tapped last (0 = none) and when (real seconds), for double-tap detection. */
 	int32 LastNumberTapped = 0;
 	double LastNumberTapTime = 0.0;
 	void HandleCamera(float DeltaTime);
 	void HandleKeys();
 	void HandleMouse();
+
+	/** The full-wall or window-wall cell whose slab the cursor ray meets first (before the ground), and how far along the ray. */
+	bool FindFullWallUnderCursor(FIntPoint& OutCell, float& OutDistance) const;
 	/** Clicks over the open loot menu go to it. Returns true if the cursor is on the menu. */
 	bool HandleLootMenuMouse();
 

@@ -1,5 +1,6 @@
 #include "SquadPlayerController.h"
 
+#include "DeploymentZone.h"
 #include "GridManager.h"
 #include "LootSystem.h"
 #include "Soldier.h"
@@ -131,6 +132,27 @@ void ASquadPlayerController::CentreCameraOnSquadNumber(int32 Number)
 	}
 }
 
+void ASquadPlayerController::FaceCameraFromOwnZone()
+{
+	APawn* Cam = GetPawn();
+	const AGridManager* GridManager = AGridManager::Find(this);
+	const ADeploymentZone* Zone = ADeploymentZone::FindForTeam(this, PlayerTeam);
+	if (!Cam || !GridManager || !Zone)
+	{
+		return;
+	}
+	const FIntPoint Min = Zone->GetMinCell();
+	const FVector ZoneCentre = (GridManager->CellToWorld(Min) + GridManager->CellToWorld(Min + FIntPoint(Zone->SizeX - 1, Zone->SizeY - 1))) * 0.5f;
+	const FVector MapCentre = (GridManager->CellToWorld(FIntPoint(0, 0))
+		+ GridManager->CellToWorld(FIntPoint(GridManager->GridSizeX - 1, GridManager->GridSizeY - 1))) * 0.5f;
+	const FVector2D Look(MapCentre - ZoneCentre);
+	if (!Look.IsNearlyZero())
+	{
+		// Corner zones (Small House) look along the diagonal; edge zones (Farmstead) straight across.
+		Cam->SetActorRotation(FRotator(0.f, FMath::RadiansToDegrees(FMath::Atan2(Look.Y, Look.X)), 0.f));
+	}
+}
+
 void ASquadPlayerController::PruneSelection()
 {
 	Selected.RemoveAll([](const TObjectPtr<ASoldier>& Soldier) { return !Soldier || Soldier->IsDead(); });
@@ -165,10 +187,12 @@ void ASquadPlayerController::PlayerTick(float DeltaTime)
 		Call();
 	}
 
-	// Start the camera over this player's own squad once it is known (the map's player start is on the Allied side).
+	// Start the camera over this player's own squad once it is known (the map's player start is on the Allied side),
+	// looking from its deployment zone towards the middle of the map.
 	if (!bCameraOnOwnSquad && IsLocalController() && GetPawn() && Squad.Num() > 0)
 	{
 		CentreCameraOnSquadNumber(1);
+		FaceCameraFromOwnZone();
 		bCameraOnOwnSquad = true;
 	}
 
@@ -446,6 +470,52 @@ bool ASquadPlayerController::HandleMinimapMouse()
 	return SquadHUD->IsOverMinimap(Mouse);
 }
 
+bool ASquadPlayerController::FindFullWallUnderCursor(FIntPoint& OutCell, float& OutDistance) const
+{
+	// Full walls and window walls are 2.6 m tall (the wall meshes; gameplay heights are on the grid).
+	constexpr float WallTop = 260.f;
+	constexpr float Step = 5.f;
+	FVector Origin, Dir;
+	if (!Grid || !DeprojectMousePositionToWorld(Origin, Dir) || Dir.Z > -KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+	// March down the cursor ray from wall-top height to the ground; the first full-wall cell it enters is the one seen.
+	// Walls are slabs about 30 cm thick across the middle of their cells (a little margin here): the ray must pass
+	// through one, not just through the open part of a wall cell beside it. A junction cell carries both slabs.
+	constexpr float HalfThickness = 20.f;
+	auto IsFullWall = [this](FIntPoint Cell)
+	{
+		const FGridCoverCell* Cover = Grid->GetCoverCell(Cell);
+		return Cover && !Cover->bPassable && (Cover->Type == ECoverType::WallCorner || Cover->Type == ECoverType::Window);
+	};
+	const float GroundZ = Grid->GetActorLocation().Z;
+	const float TTop = FMath::Max(0.f, (GroundZ + WallTop - Origin.Z) / Dir.Z);
+	const float TGround = (GroundZ - Origin.Z) / Dir.Z;
+	for (float T = TTop; T <= TGround; T += Step)
+	{
+		FIntPoint Cell;
+		const FVector P = Origin + Dir * T;
+		if (!Grid->WorldToCell(P, Cell) || !IsFullWall(Cell))
+		{
+			continue;
+		}
+		const FVector Offset = P - Grid->CellToWorld(Cell);
+		const bool bAlongX = Grid->GetCoverCell(Cell)->bRunsAlongX;
+		const bool bInXSlab = FMath::Abs(Offset.Y) <= HalfThickness
+			&& (bAlongX || IsFullWall(Cell + FIntPoint(1, 0)) || IsFullWall(Cell - FIntPoint(1, 0)));
+		const bool bInYSlab = FMath::Abs(Offset.X) <= HalfThickness
+			&& (!bAlongX || IsFullWall(Cell + FIntPoint(0, 1)) || IsFullWall(Cell - FIntPoint(0, 1)));
+		if (bInXSlab || bInYSlab)
+		{
+			OutCell = Cell;
+			OutDistance = T;
+			return true;
+		}
+	}
+	return false;
+}
+
 void ASquadPlayerController::HandleMouse()
 {
 	// The tactical map takes everything while open. Then the minimap: a camera drag started on it keeps going
@@ -474,6 +544,16 @@ void ASquadPlayerController::HandleMouse()
 	if (Grid && bHit)
 	{
 		bValidCell = Grid->WorldToCell(HitSoldier ? HitSoldier->GetActorLocation() : Hit.ImpactPoint, HoverCell);
+	}
+	// Cover meshes let the mouse trace through, so the ground behind cover can be clicked. A full wall is too tall
+	// for that: the cursor on its face or top picks the wall's own cell, never the hidden cell behind it.
+	FIntPoint WallCell;
+	float WallDistance = 0.f;
+	if (Grid && FindFullWallUnderCursor(WallCell, WallDistance) && (!bHit || WallDistance < Hit.Distance))
+	{
+		HitSoldier = nullptr;
+		HoverCell = WallCell;
+		bValidCell = true;
 	}
 	if (Grid)
 	{

@@ -159,6 +159,32 @@ ESoldierStance ASoldier::GetPostureStance() const
 	return IsBraced() ? ESoldierStance::Crouched : GetEffectiveStance();
 }
 
+FVector ASoldier::GetCoverHugOffset() const
+{
+	// Replicated state only (cell, yaw, stance, stepping, dragging), so every machine puts the body in the same place.
+	if (!Grid || bDead || bStepping || IsDragging() || IsBeingDragged() || GetEffectiveStance() == ESoldierStance::Prone)
+	{
+		return FVector::ZeroVector;
+	}
+	const float Yaw = GetActorRotation().Yaw;
+	FIntPoint Side;
+	if (!Grid->FindCoverToLeanOn(CurrentCell, Yaw, Side) || !Grid->IsLeaningToward(Side, Yaw))
+	{
+		return FVector::ZeroVector;
+	}
+	const UBallisticsData* Data = UBallisticsSubsystem::GetData();
+	const FVector Toward = FVector(Side.X, Side.Y, 0.f).GetSafeNormal();
+	FWallPeek Peek;
+	float Hug = Data->CoverHugSideways;
+	if (!IsBraced() && !GetActivePeek(Peek))
+	{
+		// Facing a wall or tree square on, the rifle would go into it: stand further off the more it faces it.
+		const float SideOn = FMath::Abs(FVector::CrossProduct(GetActorForwardVector().GetSafeNormal2D(), Toward).Z);
+		Hug = FMath::Lerp(Data->CoverHugFacing, Data->CoverHugSideways, SideOn);
+	}
+	return Toward * Hug;
+}
+
 void ASoldier::GetHitShapes(FBallisticShapes& OutShapes) const
 {
 	OutShapes.Reset();
@@ -167,7 +193,8 @@ void ASoldier::GetHitShapes(FBallisticShapes& OutShapes) const
 		return;
 	}
 	const UBallisticsData* Data = UBallisticsSubsystem::GetData();
-	const FVector Base = GetActorLocation();
+	const FVector Hug = GetCoverHugOffset();
+	const FVector Base = GetActorLocation() + Hug;
 	const FVector Forward = GetActorForwardVector().GetSafeNormal2D();
 
 	float CoverTop = 0.f;
@@ -209,7 +236,8 @@ void ASoldier::GetHitShapes(FBallisticShapes& OutShapes) const
 	if (GetEffectiveStance() != ESoldierStance::Prone && GetActivePeek(Peek))
 	{
 		PeekShift = FVector(Peek.Edge.X, Peek.Edge.Y, 0.f).GetSafeNormal() * Data->PeekSideways;
-		PeekForward = FVector(Peek.Toward.X, Peek.Toward.Y, 0.f).GetSafeNormal() * (Peek.bAlongWall ? 10.f : 20.f);
+		// Up against the wall already (Hug); without it, a little way towards the wall.
+		PeekForward = Hug.IsNearlyZero() ? FVector(Peek.Toward.X, Peek.Toward.Y, 0.f).GetSafeNormal() * (Peek.bAlongWall ? 10.f : 20.f) : FVector::ZeroVector;
 	}
 	for (int32 i = 0; i < 6; ++i)
 	{
@@ -222,7 +250,7 @@ void ASoldier::GetHitShapes(FBallisticShapes& OutShapes) const
 FVector ASoldier::GetBallisticMuzzle(const FVector& Toward) const
 {
 	const UBallisticsData* Data = UBallisticsSubsystem::GetData();
-	const FVector Base = GetActorLocation();
+	const FVector Base = GetActorLocation() + GetCoverHugOffset();
 	FVector Dir = (Toward - Base).GetSafeNormal2D();
 	if (Dir.IsNearlyZero())
 	{
