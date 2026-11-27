@@ -4,6 +4,7 @@
 #include "Soldier.h"
 #include "SoldierData.h"
 #include "SquadGameState.h"
+#include "SquadJoinError.h"
 #include "SquadPlayerController.h"
 #include "MapZoneColors.h"
 #include "WeaponData.h"
@@ -90,6 +91,46 @@ void ASquadHUD::DrawHUD()
 	DrawAudioControls(*PC);
 	DrawMatchStatus(*PC); // On top of everything...
 	DrawDebugMenu(*PC); // ...but the debug menu.
+	DrawJoinError();
+}
+
+void ASquadHUD::DrawJoinError()
+{
+	// Only on the local map the engine falls back to after a failed join; a connected client has joined fine.
+	const USquadJoinError* JoinError = GetNetMode() == NM_Standalone ? USquadJoinError::Get(this) : nullptr;
+	if (!JoinError || JoinError->GetMessage().IsEmpty())
+	{
+		return;
+	}
+	UFont* Font = GEngine ? GEngine->GetLargeFont() : nullptr;
+	UFont* Small = GEngine ? GEngine->GetSmallFont() : nullptr;
+	const float S = FMath::Clamp(Canvas->ClipY / 1080.f, 0.9f, 1.5f);
+	TArray<FString> Lines;
+	JoinError->GetMessage().ParseIntoArray(Lines, TEXT(". "));
+	Lines.Insert(TEXT("NOT CONNECTED: this is an offline copy of the map."), 0);
+
+	float BoxW = 0.f;
+	for (int32 i = 0; i < Lines.Num(); ++i)
+	{
+		float TW = 0.f, TH = 0.f;
+		GetTextSize(Lines[i], TW, TH, i == 0 ? Font : Small, i == 0 ? S : 1.2f * S);
+		BoxW = FMath::Max(BoxW, TW);
+	}
+	BoxW += 40.f * S;
+	const float LineH = 26.f * S;
+	const float BoxH = 24.f * S + LineH * Lines.Num();
+	const float X0 = (Canvas->ClipX - BoxW) * 0.5f;
+	const float Y0 = Canvas->ClipY * 0.3f;
+	DrawRect(FLinearColor(0.08f, 0.01f, 0.01f, 0.85f), X0, Y0, BoxW, BoxH);
+	for (int32 i = 0; i < Lines.Num(); ++i)
+	{
+		float TW = 0.f, TH = 0.f;
+		UFont* LineFont = i == 0 ? Font : Small;
+		const float Scale = i == 0 ? S : 1.2f * S;
+		GetTextSize(Lines[i], TW, TH, LineFont, Scale);
+		DrawText(Lines[i], i == 0 ? FLinearColor(1.f, 0.45f, 0.35f) : FLinearColor(0.95f, 0.93f, 0.9f),
+			(Canvas->ClipX - TW) * 0.5f, Y0 + 12.f * S + LineH * i, LineFont, Scale);
+	}
 }
 
 bool ASquadHUD::IsOverSquadBar(const FVector2D& ScreenPosition) const

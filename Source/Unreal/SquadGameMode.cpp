@@ -30,6 +30,16 @@ namespace
 		TEXT("Dedicated server: players who must have joined before the match starts and bots take empty teams (default 1)."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<FString> CVarBuildId(
+		TEXT("squad.BuildId"), TEXT(""),
+		TEXT("Playtest servers: the build this server runs. Clients that join with a different ?Build= URL option are refused with an 'update your game' message. Empty: no check."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarRestartAfterMatch(
+		TEXT("squad.RestartAfterMatch"), 0.f,
+		TEXT("Dedicated server: seconds after a match ends before the map reloads for the next match; it also reloads when every player has left a started match. 0: off (the game stays paused on the result)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<int32> CVarSquadsPerTeam(
 		TEXT("squad.SquadsPerTeam"), 1,
 		TEXT("Squads per team (one per player, GDD §4.1). Above 1 the game mode copies the level's squad into each deployment zone when the map loads; empty squads get bots. Set before the map loads."),
@@ -91,6 +101,7 @@ namespace
 ASquadGameMode::ASquadGameMode()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bTickEvenWhenPaused = true; // The match pauses on its result; squad.RestartAfterMatch still counts.
 
 	DefaultPawnClass = ASquadCameraPawn::StaticClass();
 	PlayerControllerClass = ASquadPlayerController::StaticClass();
@@ -138,8 +149,8 @@ void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
 		UE_LOG(LogSquadMatch, Warning, TEXT("Every %s squad already has a player; this player shares squad 1."), TeamName(Team));
 	}
 	PC->AssignTeam(Team, SquadId);
-	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s (squad %d)."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"),
-		TeamName(Team), SquadId + 1);
+	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s (squad %d); %d player(s) connected."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"),
+		TeamName(Team), SquadId + 1, GetNumPlayers());
 
 	// squad.BotsKeepSquads (AI demo matches): players only watch; the bots keep every squad.
 	if (CVarBotsKeepSquads.GetValueOnGameThread() != 0)
@@ -159,10 +170,40 @@ void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
 	}
 }
 
+void ASquadGameMode::PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage)
+{
+	Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
+	const FString ServerBuild = CVarBuildId.GetValueOnGameThread().TrimStartAndEnd();
+	if (!ErrorMessage.IsEmpty() || ServerBuild.IsEmpty())
+	{
+		return;
+	}
+	const FString ClientBuild = UGameplayStatics::ParseOption(Options, TEXT("Build")).TrimStartAndEnd();
+	if (ClientBuild != ServerBuild)
+	{
+		// Sent to the client as the reason its join failed (shown by ASquadHUD on the fallback map).
+		ErrorMessage = FString::Printf(TEXT("Your game is a different build from the server (yours: %s, server: %s). Close the game and run Join.bat again to update."),
+			ClientBuild.IsEmpty() ? TEXT("unknown") : *ClientBuild, *ServerBuild);
+		UE_LOG(LogSquadMatch, Log, TEXT("Refused %s: build %s, server runs %s."), *Address,
+			ClientBuild.IsEmpty() ? TEXT("(none)") : *ClientBuild, *ServerBuild);
+	}
+}
+
 void ASquadGameMode::Logout(AController* Exiting)
 {
 	const ASquadPlayerController* PC = Cast<ASquadPlayerController>(Exiting);
 	Super::Logout(Exiting);
+	if (Cast<APlayerController>(Exiting))
+	{
+		// Read by the playtest server scripts (HostServer.ps1, the cloud agent) to count players.
+		int32 Remaining = 0;
+		for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		{
+			const APlayerController* Other = It->Get();
+			Remaining += Other && Other != Exiting && Other->PlayerState && !MustSpectate(const_cast<APlayerController*>(Other)) ? 1 : 0;
+		}
+		UE_LOG(LogSquadMatch, Log, TEXT("Player left: %d player(s) connected."), Remaining);
+	}
 	if (PC && bMatchStarted && !bMatchEnded && bSpawnBotsForUncommandedTeams)
 	{
 		UE_LOG(LogSquadMatch, Log, TEXT("The %s squad %d player has left."), TeamName(PC->PlayerTeam), PC->PlayerSquadId + 1);
@@ -488,6 +529,14 @@ void ASquadGameMode::OnSoldierDied(const ASoldier& Victim)
 void ASquadGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bMatchStarted)
+	{
+		UpdateAutoRestart();
+	}
+	if (UGameplayStatics::IsGamePaused(this))
+	{
+		return; // Ticking while paused only for the restart countdown.
+	}
 
 	// A dedicated server waits for players before the bots start fighting; a local game starts at once (its
 	// players have logged in before the first tick).
@@ -504,6 +553,25 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 	{
 		CheckVictory(DeltaSeconds);
 	}
+}
+
+void ASquadGameMode::UpdateAutoRestart()
+{
+	const float Delay = CVarRestartAfterMatch.GetValueOnGameThread();
+	if (bRestarting || Delay <= 0.f || GetNetMode() != NM_DedicatedServer)
+	{
+		return;
+	}
+	const bool bEveryoneLeft = GetNumPlayers() == 0;
+	const bool bResultShown = bMatchEnded && GetWorld()->GetRealTimeSeconds() - MatchEndedRealTime >= Delay;
+	if (!bEveryoneLeft && !bResultShown)
+	{
+		return;
+	}
+	bRestarting = true;
+	UE_LOG(LogSquadMatch, Log, TEXT("Restarting the map for the next match (%s)."),
+		bEveryoneLeft ? TEXT("every player has left") : TEXT("the result has been shown"));
+	GetWorld()->ServerTravel(TEXT("?Restart"), false); // Connected clients travel with the server.
 }
 
 void ASquadGameMode::SpawnBots(const AController* Except)
@@ -690,6 +758,7 @@ void ASquadGameMode::CheckVictory(float DeltaSeconds)
 void ASquadGameMode::EndMatch(ESquadTeam Winner, EVictoryReason Reason)
 {
 	bMatchEnded = true;
+	MatchEndedRealTime = GetWorld()->GetRealTimeSeconds();
 	if (ASquadGameState* GS = GetGameState<ASquadGameState>())
 	{
 		GS->SetMatchResult(Winner, Reason);

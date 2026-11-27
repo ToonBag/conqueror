@@ -83,6 +83,12 @@ public:
 	/** A team left with no players goes back to a bot (play testing). */
 	virtual void Logout(AController* Exiting) override;
 
+	/**
+	 * Playtest servers: refuses a client whose build differs from squad.BuildId (the client sends its own as the
+	 * ?Build= URL option, see Scripts/Playtest). An empty squad.BuildId accepts everyone (editor and local tests).
+	 */
+	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage) override;
+
 private:
 	/** Starts the match: plans, test MGs and bots. Waits for the first player on a dedicated server (squad.MinPlayers). */
 	void StartMatch();
@@ -149,6 +155,13 @@ private:
 
 	bool bMatchStarted = false;
 	bool bMatchEnded = false;
+
+	/** Real time the match ended (squad.RestartAfterMatch counts from it). */
+	double MatchEndedRealTime = 0.0;
+
+	/** Dedicated server with squad.RestartAfterMatch: reloads the map once a match has been over long enough or everyone has left. */
+	void UpdateAutoRestart();
+	bool bRestarting = false;
 
 	/** Team holding every VP right now, and for how long without a break. */
 	bool bVPHeld = false;

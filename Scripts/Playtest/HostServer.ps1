@@ -13,6 +13,9 @@
   ./Scripts/Playtest/HostServer.ps1 -NoBots            # empty squads stand still instead of a bot playing them
   ./Scripts/Playtest/HostServer.ps1 -Stop              # stop the server
 
+  The server only lets in clients of the newest packaged build (Playtest/last-build.json, see
+  PackageClient.ps1); -BuildId picks another, -NoBuildCheck lets any build in.
+
   Log: Saved/Logs/Playtest_Server.log. Ctrl+C stops watching; the server keeps running until -Stop.
 #>
 param(
@@ -22,6 +25,8 @@ param(
     [int]$Port = 17777,
     [string]$Map = "/Game/Maps/Farmstead",
     [switch]$Stop,
+    [string]$BuildId = "",       # default: the newest packaged client's build
+    [switch]$NoBuildCheck,
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -65,15 +70,21 @@ if (-not $Rule) {
     "  (Port forwarding instead? Use -RemoteAddress Any. If Windows pops up its own prompt, tick both Private and Public.)"
 }
 
+$LastBuild = Join-Path $Root "Playtest\last-build.json"
+if (-not $BuildId -and -not $NoBuildCheck -and (Test-Path $LastBuild)) { $BuildId = (Get-Content $LastBuild -Raw | ConvertFrom-Json).build }
+if ($NoBuildCheck) { $BuildId = "" }
+
 $ServerArgs = @("`"$Project`"", $Map, "-server", "-port=$Port", "-log", "-unattended", "-nosplash", "-abslog=`"$Log`"",
     "-ini:Engine:[ConsoleVariables]:squad.SquadsPerTeam=$SquadsPerTeam", "-ini:Engine:[ConsoleVariables]:squad.MinPlayers=$Players")
 if ($NoBots) { $ServerArgs += "-ini:Engine:[ConsoleVariables]:squad.Bot=0" }
+if ($BuildId) { $ServerArgs += "-ini:Engine:[ConsoleVariables]:squad.BuildId=$BuildId" }
 if (Test-Path $Log) { Remove-Item $Log }
 $Server = Start-Process $Editor -PassThru -WindowStyle Minimized -ArgumentList $ServerArgs
 $Server.Id | Set-Content $PidFile
 
 ""
 "Squad Command playtest server: pid $($Server.Id), port UDP $Port, map $Map, $SquadsPerTeam squad(s) per team, starts when $Players player(s) have joined, commit $Commit"
+if ($BuildId) { "Lets in clients of build $BuildId only (-NoBuildCheck: any build)." } else { "Lets in clients of any build." }
 "Give friends ONE of these addresses (they run Join.bat and type it, or you bake it in with PackageClient.ps1 -HostAddress):"
 $Tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
 if ($Tailscale) {
@@ -94,14 +105,20 @@ while (-not (Test-Path $Log)) {
     if ((Get-Date) -gt $Deadline -or $Server.HasExited) { throw "Server did not start; see $Log." }
     Start-Sleep -Milliseconds 500
 }
-Get-Content $Log -Wait | ForEach-Object {
+try {
+Get-Content $Log -Wait -ErrorAction Stop | ForEach-Object {
     switch -Regex ($_) {
         "Bringing World .* up for play|Match starts"     { "[server] $($_ -replace '^\[[^\]]*\]\[[^\]]*\]', '')" }
         "Join succeeded: (.*)"                            { "[join]   $($Matches[1])" }
         "LogSquadMatch: (.* joins the .*)"                { "[team]   $($Matches[1])" }
+        "LogSquadMatch: (Restarting the map.*)"           { "[server] $($Matches[1])"; break }
         "LogSquadMatch: (.*hands its squad.*|.*has left.*|Every .* player has left.*)" { "[bots]   $($Matches[1])" }
-        "LogNet: .*(UChannel::CleanUp|Connection closed|Close: .*Driver: GameNetDriver)" { "[left]   $_" }
+        "LogSquadMatch: (Player left: .*)"                { "[left]   $($Matches[1])" }
+        "LogSquadMatch: (Refused .*)"                     { "[refused] $($Matches[1])" }
         "MATCH OVER: (.*)"                                { "[result] $($Matches[1])" }
         "Critical error|Fatal error|Assertion failed"     { Write-Warning "SERVER ERROR: $_" }
     }
+}
+} catch {
+    "Stopped watching: the server log is gone (server stopped?)."
 }
