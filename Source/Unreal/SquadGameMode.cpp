@@ -35,6 +35,11 @@ namespace
 		TEXT("Squads per team (one per player, GDD §4.1). Above 1 the game mode copies the level's squad into each deployment zone when the map loads; empty squads get bots. Set before the map loads."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<int32> CVarBotsKeepSquads(
+		TEXT("squad.BotsKeepSquads"), 0,
+		TEXT("AI demo matches (server): bots run every squad and joining players only watch (no takeover, no test weapons)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<int32> CVarSwapSides(
 		TEXT("squad.SwapSides"), 0,
 		TEXT("Balancing test (server): each faction starts in the other's deployment zone, with its own rifles. Set before the map loads."),
@@ -136,6 +141,12 @@ void ASquadGameMode::PostLogin(APlayerController* NewPlayer)
 	UE_LOG(LogSquadMatch, Log, TEXT("%s joins the %s (squad %d)."), PC->PlayerState ? *PC->PlayerState->GetPlayerName() : TEXT("Player"),
 		TeamName(Team), SquadId + 1);
 
+	// squad.BotsKeepSquads (AI demo matches): players only watch; the bots keep every squad.
+	if (CVarBotsKeepSquads.GetValueOnGameThread() != 0)
+	{
+		UE_LOG(LogSquadMatch, Log, TEXT("squad.BotsKeepSquads: the player watches; the %s squad %d bot keeps its squad."), TeamName(Team), SquadId + 1);
+		return;
+	}
 	// A player joining a bot-run squad takes it over.
 	if (ASquadBot* Bot = ASquadBot::FindForSquad(this, Team, SquadId))
 	{
@@ -392,6 +403,10 @@ int32 ASquadGameMode::CountPlayers(ESquadTeam Team, const AController* Except) c
 
 void ASquadGameMode::GiveTestWeapons()
 {
+	if (CVarBotsKeepSquads.GetValueOnGameThread() != 0)
+	{
+		return; // Bot squads keep their standard loadout.
+	}
 	TSet<int32> NewSquads = GetCommandedSquads().Difference(SquadsGivenTestWeapons);
 	SquadsGivenTestWeapons.Append(NewSquads);
 	if (NewSquads.IsEmpty())
@@ -493,7 +508,7 @@ void ASquadGameMode::Tick(float DeltaSeconds)
 
 void ASquadGameMode::SpawnBots(const AController* Except)
 {
-	const TSet<int32> Commanded = GetCommandedSquads(Except);
+	const TSet<int32> Commanded = CVarBotsKeepSquads.GetValueOnGameThread() != 0 ? TSet<int32>() : GetCommandedSquads(Except);
 	for (const ESquadTeam Team : GetSquadTeams())
 	for (const int32 SquadId : GetSquadIds(Team))
 	{
