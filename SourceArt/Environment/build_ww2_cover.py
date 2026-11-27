@@ -469,6 +469,51 @@ def wall_pillar(name, body):
     return m
 
 
+def wall_wood(name="SM_Wall_Wood"):
+    """Full-height plank stockade (Small House's yard walls): vertical boards with a rail near the top and bottom on
+    both faces. A full wall in play (2.6 m, blocks sight); the boards are thinner than WALL_T, the rails fill it out."""
+    m = Mesh(name)
+    n = 5
+    for i in range(n):
+        x0 = -0.5 + i / n
+        x1 = x0 + 1.0 / n - 0.012
+        h = WALL_H - m.r.uniform(0.0, 0.09)
+        m.box(x0 + 0.006, x1, -0.06, 0.06, 0, h, m.pick("Wood", "WoodDark", "Wood", "WoodDark", "WoodLight"), jit=0.004)
+    for z in (0.35, 2.05):
+        for side in (-1, 1):
+            y0, y1 = sorted((side * 0.06, side * 0.13))
+            m.box(-0.5, 0.5, y0, y1, z, z + 0.15, "WoodDark", jit=0.004)
+    m.collide(-0.5, 0.5, -WALL_T / 2, WALL_T / 2, 0, WALL_H)
+    return m
+
+
+def wall_wood_window(name="SM_Wall_Wood_Window"):
+    """Plank stockade with an unglazed window cut through it: boards below the 0.9 m sill and above the 2.0 m top,
+    a post either side of the opening and a board sill / lintel on both faces."""
+    m = Mesh(name)
+    t = WALL_T / 2
+    n = 5
+    for i in range(n):
+        x0 = -0.5 + i / n
+        x1 = x0 + 1.0 / n - 0.012
+        mat = m.pick("Wood", "WoodDark", "Wood", "WoodDark", "WoodLight")
+        m.box(x0 + 0.006, x1, -0.06, 0.06, 0, SILL, mat, jit=0.004)
+        if i in (0, n - 1):  # the outer boards run full height: posts either side of the opening
+            m.box(x0 + 0.006, x1, -0.06, 0.06, SILL, WTOP, mat, jit=0.004)
+        m.box(x0 + 0.006, x1, -0.06, 0.06, WTOP, WALL_H - m.r.uniform(0.0, 0.09), mat, jit=0.004)
+    for side in (-1, 1):
+        y0, y1 = sorted((side * 0.06, side * 0.13))
+        m.box(-0.5, 0.5, y0, y1, 0.35, 0.50, "WoodDark", jit=0.004)            # bottom rail
+        m.box(-0.5, 0.5, y0, y1, SILL - 0.05, SILL, "WoodDark")                 # sill board
+        m.box(-0.5, 0.5, y0, y1, WTOP, WTOP + 0.12, "WoodDark")                 # lintel board
+        m.box(-0.5, 0.5, y0, y1, 2.05, 2.20, "WoodDark", jit=0.004)            # top rail
+    m.collide(-0.5, 0.5, -t, t, 0, SILL)
+    m.collide(-0.5, 0.5, -t, t, WTOP, WALL_H)
+    m.collide(-0.5, -0.3, -t, t, SILL, WTOP)
+    m.collide(0.3, 0.5, -t, t, SILL, WTOP)
+    return m
+
+
 def wall_doorway(name="SM_Wall_Doorway_Plaster"):
     """Cosmetic lintel + frame over an open (walkable) doorway cell."""
     m = Mesh(name)
@@ -1412,6 +1457,7 @@ CATEGORIES = [
         lambda: wall_window("SM_Wall_Window_Plaster", "Plaster"),
         lambda: wall_window("SM_Wall_Window_Brick", "Brick"),
         lambda: wall_window("SM_Wall_Window_Plaster_Broken", "Plaster", broken=True),
+        wall_wood, lambda: wall_wood("SM_Wall_Wood_B"), wall_wood_window,
     ]),
     ("LowCover", [
         lowwall_stone, lambda: lowwall_stone("SM_LowWall_Stone_Damaged", damaged=True), lowwall_brick,

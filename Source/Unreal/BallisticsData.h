@@ -88,6 +88,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Posture", meta = (Units = "cm"))
 	float BracedLeanForward = 25.f;
 
+	/**
+	 * Leaning on cover (GDD §9.2, §16.2): the whole body stands this far from its cell centre towards the cover, so it
+	 * is up against it, when the cover is beside it (side-on) or it rests on / leans out past it. Model and hit
+	 * spheres both move.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Posture", meta = (Units = "cm"))
+	float CoverHugSideways = 45.f;
+
+	/** As CoverHugSideways when facing a full-height cover square on (less, so the rifle doesn't go into it); blended by angle. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Posture", meta = (Units = "cm"))
+	float CoverHugFacing = 15.f;
+
 	/** Braced and reloading: the whole body drops this far, below the top of the cover. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Posture", meta = (Units = "cm"))
 	float DuckDrop = 45.f;

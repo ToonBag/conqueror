@@ -63,14 +63,14 @@ struct FWallPeek
 	bool bAlongWall = false;
 
 	/**
-	 * The area the soldier sees by leaning out: everything beyond the wall's row, from the open column just
-	 * past the edge back along the wall - or, looking down a wall's face (bAlongWall), from that column outwards.
+	 * The area the soldier sees by leaning out: everything beyond the wall's row (back over the wall and out
+	 * on the open side alike) - or, looking down a wall's face (bAlongWall), from the open column outwards.
 	 */
 	bool Covers(FIntPoint Cell) const
 	{
 		const FIntPoint Rel = Cell - WallCell;
 		const int32 Out = Rel.X * Edge.X + Rel.Y * Edge.Y;
-		return Rel.X * Toward.X + Rel.Y * Toward.Y >= 1 && (bAlongWall ? Out >= 1 : Out <= 1);
+		return Rel.X * Toward.X + Rel.Y * Toward.Y >= 1 && (!bAlongWall || Out >= 1);
 	}
 };
 

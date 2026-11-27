@@ -109,9 +109,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Line of Sight", meta = (ClampMin = "0", Units = "cm"))
 	float WindowTopHeight = 200.f;
 
-	/** Trees block sight like a full wall (cover is not see-through). Turn off to let sight pass trees. */
+	/**
+	 * Trees block sight like a full wall. Off by default (GDD §9.3, v0.70): a soldier leaning on a tree peers round
+	 * it, so nobody can hide behind one; the trunk still gives cover against fire from in front.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Line of Sight")
-	bool bTreesBlockLineOfSight = true;
+	bool bTreesBlockLineOfSight = false;
 
 	/** Furthest a soldier can see (metres, cell centre to cell centre). Matches the rifles' Long range max (GDD §5.3, §9.3). 0 = unlimited. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Line of Sight", meta = (ClampMin = "0", Units = "m"))

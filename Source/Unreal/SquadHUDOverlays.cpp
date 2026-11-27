@@ -333,13 +333,23 @@ void ASquadHUD::AddCoverPreview(ASquadPlayerController& PC, TArray<FCanvasUVTri>
 
 // ------------------------------------------------------------------------------------------------ Vision cones
 
+namespace
+{
+	TAutoConsoleVariable<int32> CVarVisionFlashDebug(TEXT("squad.VisionFlashDebug"), 0,
+		TEXT("Debug: 1 keeps each soldier's vision-cone flash on screen (until it moves) and draws it stronger, to check its shape."));
+}
+
 void ASquadHUD::UpdateVisionFlashes(ASquadPlayerController& PC)
 {
 	using namespace Overlays;
 
 	AGridManager* Grid = AGridManager::Find(this);
 	const float Now = GetWorld()->GetTimeSeconds();
-	VisionFlashes.RemoveAll([&](const FVisionFlash& F) { return !F.Soldier.IsValid() || F.Soldier->IsDead() || Now - F.StartTime > VisionFlashDuration; });
+	const bool bHold = CVarVisionFlashDebug.GetValueOnGameThread() != 0;
+	VisionFlashes.RemoveAll([&](const FVisionFlash& F)
+	{
+		return !F.Soldier.IsValid() || F.Soldier->IsDead() || (bHold ? F.Soldier->IsMoving() : Now - F.StartTime > VisionFlashDuration);
+	});
 	if (!Grid)
 	{
 		return;
@@ -383,76 +393,86 @@ void ASquadHUD::UpdateVisionFlashes(ASquadPlayerController& PC)
 		}
 		VisionFlashCells.Add(Soldier, Cell);
 
-		// The cone's far edge, ray by ray: how far a standing enemy could be seen (GDD §9.3: cover blocks sight,
-		// a soldier leaning out past a wall's end sees from beside it). Cover cells themselves are skipped.
-		FVisionFlash& Flash = VisionFlashes.AddDefaulted_GetRef();
-		Flash.Soldier = Soldier;
-		Flash.StartTime = Now;
-		Flash.Apex = FVector2D(Grid->CellToWorld(Cell));
-		float FirstYaw = Soldier->GetActorRotation().Yaw - VisionFlashHalfAngle;
-		float SpanYaw = 2.f * VisionFlashHalfAngle;
-		float MinReach = 0.5f;
-		FWallPeek Peek;
-		if (Soldier->GetActivePeek(Peek))
+		// One cone of everything the soldier sees (GDD §9.3), fanned out from where it stands: its facing ±60°, widened
+		// to take in what it sees by leaning out past a wall's edge (§9.2) from the open cell beside the wall's end -
+		// everything beyond the wall's row, or looking down a wall's face, outwards from it.
+		float From = -VisionFlashHalfAngle;
+		float To = VisionFlashHalfAngle;
+		TArray<FWallPeek> Peeks;
+		Grid->GetWallPeeks(Cell, Yaw, Peeks);
+		for (const FWallPeek& Peek : Peeks)
 		{
-			// Leaning out past a wall's edge: the cone fans out from the wall's corner over the open side only, from
-			// straight along the wall to VisionFlashHalfAngle off it. The apex sits just outside the corner, so the
-			// ray along the wall's face doesn't clip the wall cells.
-			const FVector2D Toward(Peek.Toward.X, Peek.Toward.Y);
-			const FVector2D Edge(Peek.Edge.X, Peek.Edge.Y);
-			Flash.Apex = FVector2D(Grid->CellToWorld(Peek.WallCell)) + (Edge * 0.55f - Toward * 0.5f) * Grid->CellSize;
-			const float TowardYaw = FMath::RadiansToDegrees(FMath::Atan2(Toward.Y, Toward.X));
+			const float TowardYaw = FMath::RadiansToDegrees(FMath::Atan2(static_cast<float>(Peek.Toward.Y), static_cast<float>(Peek.Toward.X)));
+			const float Rel = FMath::FindDeltaAngleDegrees(Yaw, TowardYaw); // Within the leaning angle, so |Rel| < 90.
 			const bool bEdgeIsPositive = Peek.Edge == FIntPoint(-Peek.Toward.Y, Peek.Toward.X); // +90° yaw from Toward.
-			FirstYaw = bEdgeIsPositive ? TowardYaw : TowardYaw - VisionFlashHalfAngle;
-			SpanYaw = VisionFlashHalfAngle;
-			MinReach = 0.f;
+			const float Lo = !Peek.bAlongWall ? Rel - 90.f : (bEdgeIsPositive ? Rel : Rel - 90.f);
+			const float Hi = !Peek.bAlongWall ? Rel + 90.f : (bEdgeIsPositive ? Rel + 90.f : Rel);
+			From = FMath::Min(From, Lo);
+			To = FMath::Max(To, Hi);
 		}
-		const float Height = Soldier->GetSightHeight();
-		TArray<FIntPoint, TInlineAllocator<3>> Origins;
-		for (int32 R = 0; R < VisionRays; ++R)
+		const FVector2D Apex = FVector2D(Grid->CellToWorld(Cell) + Soldier->GetCoverHugOffset());
+		AddVisionFan(*Grid, *Soldier, Apex, Yaw + From, FMath::Min(To - From, 359.f), 0.3f, Soldier->GetSightHeight(), TargetHeight, MaxSight, Now);
+	}
+}
+
+void ASquadHUD::AddVisionFan(const AGridManager& Grid, const ASoldier& Soldier, const FVector2D& Apex, float FirstYaw, float SpanYaw,
+	float MinReach, float Height, float TargetHeight, float MaxSight, float Now)
+{
+	using namespace Overlays;
+
+	FVisionFlash& Flash = VisionFlashes.AddDefaulted_GetRef();
+	Flash.Soldier = const_cast<ASoldier*>(&Soldier);
+	Flash.StartTime = Now;
+	Flash.Apex = Apex;
+	FIntPoint ApexCell;
+	Grid.WorldToCell(FVector(Apex, Grid.GetActorLocation().Z), ApexCell);
+	// About one ray every 2.5° (49 over the normal 120° cone), so a wide cone keeps the same detail.
+	const int32 Rays = FMath::Max(VisionRays, FMath::CeilToInt(SpanYaw / 2.5f) + 1);
+	TArray<FIntPoint, TInlineAllocator<3>> Origins;
+	for (int32 R = 0; R < Rays; ++R)
+	{
+		const FVector2D Dir = YawDir(FirstYaw + SpanYaw * R / (Rays - 1));
+		float Reach = 0.f;
+		FIntPoint LastCell = ApexCell;
+		bool bLastVisible = true;
+		for (float D = VisionRayStepMetres; D <= MaxSight + KINDA_SMALL_NUMBER; D += VisionRayStepMetres)
 		{
-			const FVector2D Dir = YawDir(FirstYaw + SpanYaw * R / (VisionRays - 1));
-			float Reach = 0.f;
-			FIntPoint LastCell = Cell;
-			bool bLastVisible = true;
-			for (float D = VisionRayStepMetres; D <= MaxSight + KINDA_SMALL_NUMBER; D += VisionRayStepMetres)
+			FIntPoint Probe;
+			if (!Grid.WorldToCell(FVector(Apex + Dir * D * Grid.CellSize, Grid.GetActorLocation().Z), Probe))
 			{
-				FIntPoint Probe;
-				if (!Grid->WorldToCell(FVector(Flash.Apex + Dir * D * Grid->CellSize, Grid->GetActorLocation().Z), Probe))
-				{
-					break; // Off the map.
-				}
-				if (Probe != LastCell)
-				{
-					LastCell = Probe;
-					// Rubble (GDD §9.4) can be stood on, so it is judged like open ground.
-					if (const FGridCoverCell* Cover = Grid->GetCoverCell(Probe); Cover && !Cover->bPassable)
-					{
-						if (Cover->bBlocksLineOfSight)
-						{
-							break; // Full walls end the ray: nothing is seen through or along the top of one.
-						}
-						continue; // Judge the cells beyond low cover, not the cover itself.
-					}
-					Soldier->GetSightOrigins(Probe, Origins);
-					bLastVisible = false;
-					for (const FIntPoint& Origin : Origins)
-					{
-						if (Grid->HasLineOfSight(Origin, Probe, Height, TargetHeight))
-						{
-							bLastVisible = true;
-							break;
-						}
-					}
-				}
-				if (!bLastVisible)
-				{
-					break;
-				}
-				Reach = D;
+				break; // Off the map.
 			}
-			Flash.Edge.Add(Flash.Apex + Dir * FMath::Max(Reach, MinReach) * Grid->CellSize);
+			if (Probe != LastCell)
+			{
+				LastCell = Probe;
+				// Cover cells aren't judged; the ground beyond them is. A ray carries on past a wall only while what lies
+				// beyond is still seen (from the open cell the soldier leans out from), so the cone stays one shape.
+				// Rubble (GDD §9.4) can be stood on, so it is judged like open ground.
+				if (const FGridCoverCell* Cover = Grid.GetCoverCell(Probe); Cover && !Cover->bPassable)
+				{
+					continue;
+				}
+				Soldier.GetSightOrigins(Probe, Origins);
+				bLastVisible = false;
+				for (const FIntPoint& Origin : Origins)
+				{
+					if (Grid.HasLineOfSight(Origin, Probe, Height, TargetHeight))
+					{
+						bLastVisible = true;
+						break;
+					}
+				}
+			}
+			if (!bLastVisible)
+			{
+				break;
+			}
+			if (const FGridCoverCell* Cover = Grid.GetCoverCell(Probe); !Cover || Cover->bPassable)
+			{
+				Reach = D; // The edge sits on seen ground, never inside a wall.
+			}
 		}
+		Flash.Edge.Add(Apex + Dir * FMath::Max(Reach, MinReach) * Grid.CellSize);
 	}
 }
 
@@ -465,7 +485,8 @@ void ASquadHUD::AddVisionFlashes(ASquadPlayerController& PC, TArray<FCanvasUVTri
 	for (const FVisionFlash& Flash : VisionFlashes)
 	{
 		const float T = Now - Flash.StartTime;
-		const float Envelope = FMath::Clamp(FMath::Min(T / VisionFadeIn, (VisionFlashDuration - T) / VisionFadeOut), 0.f, 1.f);
+		const bool bHold = CVarVisionFlashDebug.GetValueOnGameThread() != 0;
+		const float Envelope = bHold ? 3.f : FMath::Clamp(FMath::Min(T / VisionFadeIn, (VisionFlashDuration - T) / VisionFadeOut), 0.f, 1.f);
 		if (Envelope <= 0.f || Flash.Edge.Num() < 2)
 		{
 			continue;

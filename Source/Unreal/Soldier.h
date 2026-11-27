@@ -850,6 +850,9 @@ public:
 	 */
 	bool IsBraced(float* OutCoverTop = nullptr, FVector* OutTowardCover = nullptr) const;
 
+	/** World offset of the body from the cell centre while leaning on cover: up against it (GDD §16.2). Zero otherwise. */
+	FVector GetCoverHugOffset() const;
+
 	/** Posture to animate: crouched while braced, else GetEffectiveStance. */
 	ESoldierStance GetPostureStance() const;
 

@@ -11,6 +11,8 @@ or from the editor's Python console: exec(open(r"<this file>").read())
   and makes unsaveable transient materials), keeping the UCX_ collision boxes.
 * Puts meshes in /Game/Environment/<Category>/ and assigns MI_Env_* by material slot name.
 * Writes a report next to this script (import_report.txt).
+* Set the COVER_ONLY environment variable (comma-separated mesh names, e.g. "SM_Wall_Wood,SM_Wall_Wood_B") to import
+  just those meshes and leave the rest untouched (report: Saved/import_cover_partial.txt).
 """
 import json, os
 import unreal
@@ -24,6 +26,9 @@ MAT_DIR = ROOT + "/Materials"
 MASTER_SRC = "/Game/Weapons/Materials/M_Weapon_Master"
 MASTER = MAT_DIR + "/M_Env_Master"
 
+ONLY = {n.strip() for n in os.environ.get("COVER_ONLY", "").split(",") if n.strip()}
+if ONLY:  # A partial import keeps the full report and writes its own under Saved/.
+    REPORT = os.path.join(unreal.Paths.project_saved_dir(), "import_cover_partial.txt")
 eal = unreal.EditorAssetLibrary
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 lines = []
@@ -75,6 +80,9 @@ def import_options():
 def run():
     with open(os.path.join(FBX_DIR, "manifest.json")) as f:
         manifest = json.load(f)
+    if ONLY:
+        manifest["meshes"] = {k: v for k, v in manifest["meshes"].items() if k in ONLY}
+        log("only: %s" % sorted(manifest["meshes"]))
     mis = make_materials(manifest["materials"])
     log("materials: %d" % len(mis))
 
@@ -120,7 +128,11 @@ def run():
             ("  NO MATERIAL FOR " + ",".join(missing)) if missing else ""))
         if missing:
             bad += 1
-    eal.save_directory(ROOT, only_if_is_dirty=False, recursive=True)
+    if ONLY:
+        for name, cat in manifest["meshes"].items():
+            eal.save_asset("%s/%s/%s" % (ROOT, cat, name), only_if_is_dirty=False)
+    else:
+        eal.save_directory(ROOT, only_if_is_dirty=False, recursive=True)
     log("done, %d problems" % bad)
 
 

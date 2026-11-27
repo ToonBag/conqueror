@@ -1433,11 +1433,15 @@ void ASoldier::TickCosmetics(float DeltaSeconds)
 		// clears the wall's end and points down its face. Mirrors when the anim instance picks a peek clip.
 		const bool bPeekPose = !IsMoving() && !IsDowned() && !IsDragging() && GetEffectiveStance() != ESoldierStance::Prone
 			&& GetLeaningCoverType() == ECoverType::WallCorner;
+		// Leaning on cover: the whole model stands up against it (the hit spheres move the same way, GDD §16.2).
 		const float TargetShift = bPeekPose ? GetPeekSide() * VisualData->PeekSideShift : 0.f;
+		const FVector Hug = GetActorRotation().UnrotateVector(GetCoverHugOffset());
 		const FVector ModelLocation = Model->GetRelativeLocation();
-		if (!FMath::IsNearlyEqual(ModelLocation.Y, TargetShift, 0.1f))
+		const FVector2D Target(Hug.X, Hug.Y + TargetShift);
+		if (!FVector2D(ModelLocation).Equals(Target, 0.1f))
 		{
-			Model->SetRelativeLocation(FVector(ModelLocation.X, FMath::FInterpTo(ModelLocation.Y, TargetShift, DeltaSeconds, VisualData->PeekShiftSpeed), ModelLocation.Z));
+			const FVector2D Now = FMath::Vector2DInterpTo(FVector2D(ModelLocation), Target, DeltaSeconds, VisualData->PeekShiftSpeed);
+			Model->SetRelativeLocation(FVector(Now.X, Now.Y, ModelLocation.Z));
 		}
 	}
 
