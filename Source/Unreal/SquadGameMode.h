@@ -32,6 +32,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "1"))
 	float VPWinTime = 300.f;
 
+	/** GDD §3.5 Match Time Limit: seconds of play before the match is decided on points (a map's AGridManager can set its own). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "1"))
+	float MatchTimeLimit = 1200.f;
+
+	/** GDD §11: points the opposing team earns each time a soldier dies (bleed-outs and team kills included). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "0"))
+	float PointsPerKill = 4.f;
+
+	/** Server: a soldier died; its enemies score PointsPerKill. Called by ASoldier::Die. */
+	void OnSoldierDied(const class ASoldier& Victim);
+
 	/** Give squads no player commands to an AI bot (play testing). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match")
 	bool bSpawnBotsForUncommandedTeams = true;
@@ -53,21 +64,46 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match|Testing")
 	TSoftObjectPtr<class UWeaponData> AxisTestMachineGun = TSoftObjectPtr<UWeaponData>(FSoftObjectPath(TEXT("/Game/Data/DA_MG42.DA_MG42")));
 
+	/**
+	 * Play testing (GDD §6.2): the soldier with this number (1-4) in every player-commanded squad starts with its
+	 * faction's submachine gun instead of a rifle. 0 turns it off. Bot squads keep their rifles.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match|Testing", meta = (ClampMin = "0", ClampMax = "4"))
+	int32 TestSubmachineGunSoldier = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match|Testing")
+	TSoftObjectPtr<class UWeaponData> AlliedTestSubmachineGun = TSoftObjectPtr<UWeaponData>(FSoftObjectPath(TEXT("/Game/Data/DA_Thompson.DA_Thompson")));
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match|Testing")
+	TSoftObjectPtr<class UWeaponData> AxisTestSubmachineGun = TSoftObjectPtr<UWeaponData>(FSoftObjectPath(TEXT("/Game/Data/DA_MP40.DA_MP40")));
+
 	/** Each joining player goes to the team with fewer players (Allies on a tie) and takes over its bot, if any. */
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 	/** A team left with no players goes back to a bot (play testing). */
 	virtual void Logout(AController* Exiting) override;
 
+	/**
+	 * Playtest servers: refuses a client whose build differs from squad.BuildId (the client sends its own as the
+	 * ?Build= URL option, see Scripts/Playtest). An empty squad.BuildId accepts everyone (editor and local tests).
+	 */
+	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage) override;
+
 private:
 	/** Starts the match: plans, test MGs and bots. Waits for the first player on a dedicated server (squad.MinPlayers). */
 	void StartMatch();
 
+	/** Balancing tests: applies squad.TuningOverrides to the loaded data assets. */
+	void ApplyTuningOverrides();
+
 	/** Bots for squads no player commands (Except: a player logging out). */
 	void SpawnBots(const AController* Except = nullptr);
 
-	/** Gives TestMachineGunSoldier in each player-commanded squad its faction's machine gun (once per squad). */
-	void GiveTestMachineGuns();
+	/**
+	 * Gives TestMachineGunSoldier and TestSubmachineGunSoldier in each player-commanded squad their faction's
+	 * machine gun and submachine gun (once per squad).
+	 */
+	void GiveTestWeapons();
 
 	/** Teams that have soldiers on this map. */
 	TArray<ESquadTeam> GetSquadTeams() const;
@@ -75,8 +111,8 @@ private:
 	/** Players on Team, leaving out Except. */
 	int32 CountPlayers(ESquadTeam Team, const AController* Except = nullptr) const;
 
-	/** Squads (SquadKey) that have had their test machine gun. */
-	TSet<int32> SquadsGivenTestMG;
+	/** Squads (SquadKey) that have had their test weapons. */
+	TSet<int32> SquadsGivenTestWeapons;
 
 	static int32 SquadKey(ESquadTeam Team, int32 SquadId) { return static_cast<int32>(Team) * 1000 + SquadId; }
 
@@ -111,8 +147,21 @@ private:
 	void EndMatch(ESquadTeam Winner, EVictoryReason Reason);
 	float GetVPWinTime() const;
 
+	/** squad.MatchTime, else the map's limit, else MatchTimeLimit. 0: no limit. */
+	float GetMatchTimeLimit() const;
+
+	/** Seconds of play since the match started. */
+	float MatchElapsed = 0.f;
+
 	bool bMatchStarted = false;
 	bool bMatchEnded = false;
+
+	/** Real time the match ended (squad.RestartAfterMatch counts from it). */
+	double MatchEndedRealTime = 0.0;
+
+	/** Dedicated server with squad.RestartAfterMatch: reloads the map once a match has been over long enough or everyone has left. */
+	void UpdateAutoRestart();
+	bool bRestarting = false;
 
 	/** Team holding every VP right now, and for how long without a break. */
 	bool bVPHeld = false;

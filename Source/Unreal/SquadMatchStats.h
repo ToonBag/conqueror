@@ -4,12 +4,21 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "KillFeedTypes.h"
 #include "SquadTypes.h"
+#include "BallisticsTypes.h"
 #include "SquadMatchStats.generated.h"
 
 class ASoldier;
 class AVictoryPoint;
 struct FHitChanceInfo;
 struct FKillCause;
+
+/** The target as it was when a round reached it, before the hit changed it (projectile rounds are recorded afterwards). */
+struct FShotTargetSnapshot
+{
+	ESoldierStance Stance = ESoldierStance::Standing;
+	bool bMoving = false;
+	bool bInjured = false;
+};
 
 /**
  * Server-only match recorder for balancing (AI test matches, squad.MatchStats 1). It records every rifle shot
@@ -40,9 +49,24 @@ public:
 	/** Writes the record. Reason: "annihilation", "victory_points", "draw" or "timeout". */
 	void OnMatchEnded(ESquadTeam Winner, const FString& Reason);
 
-	void RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit);
+	/** Call before the hit is applied, or pass TargetBefore. HitPart: projectile model only. */
+	void RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit, const TCHAR* HitPart = TEXT(""),
+		const FShotTargetSnapshot* TargetBefore = nullptr);
 	/** After a rifle hit: Outcome "injured", "killed" or "none" (invulnerable / already dead). */
 	void RecordHitOutcome(const FString& Outcome);
+	/** The shot row RecordHitOutcome would fill (the last rolled shot); INDEX_NONE if none. */
+	int32 TakePendingOutcomeRow() { const int32 Row = PendingOutcomeRow; PendingOutcomeRow = INDEX_NONE; return Row; }
+	/** Fills a row taken earlier with TakePendingOutcomeRow (hits resolved at the end of the server tick). */
+	void RecordHitOutcomeAt(int32 Row, const FString& Outcome);
+	/**
+	 * Projectile model (GDD §16): one row per round when it stops. bHitTarget: it hit the soldier aimed at, and
+	 * Outcome is "injured" / "killed" / "none"; otherwise Outcome says where it went ("miss_cover",
+	 * "miss_ground", "miss_lost", "stray_enemy", "friendly").
+	 */
+	void RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
+		EHitPart Part, const FString& Outcome, const FShotTargetSnapshot& TargetBefore);
+	/** Projectile model: a round hit a soldier it was not aimed at. Effect: "injured", "killed" or "none". */
+	void RecordStrayHit(const ASoldier& Shooter, const ASoldier& Victim, bool bFriendly, float DistanceMetres, const FString& Effect);
 	void RecordGrenadeThrown(const ASoldier& Thrower, FIntPoint From, FIntPoint Target);
 	void RecordDeath(const ASoldier& Victim, const FKillCause& Cause);
 	void RecordBlastVictim(const ASoldier* Instigator, EKillMethod Method, const ASoldier& Victim, const TCHAR* Effect);
@@ -87,6 +111,8 @@ private:
 	/** One CSV row per shot; the last row's outcome is filled in by RecordHitOutcome. */
 	TArray<FString> ShotRows;
 	int32 PendingOutcomeRow = INDEX_NONE;
+	/** One CSV row per living soldier every half second: where it is and what it is doing (rush analysis, GDD §11.2). */
+	TArray<FString> TrackRows;
 	TArray<FString> Events;
 	/** Per blast-causing thrower: blasts that hit enemies / friends. */
 	int32 GrenadesThrownTotal[2] = { 0, 0 };
@@ -94,4 +120,11 @@ private:
 	int32 BlastStuns[2] = { 0, 0 };
 	int32 FriendlyBlastCasualties[2] = { 0, 0 };
 	int32 VPCaptures[2] = { 0, 0 };
+	/** Projectile model, per shooter's team. */
+	bool bBallisticsMatch = false;
+	int32 FriendlyFireHits[2] = { 0, 0 };
+	int32 FriendlyFireInjuries[2] = { 0, 0 };
+	int32 StrayEnemyHits[2] = { 0, 0 };
+	int32 HitParts[2][6] = { { 0 } };
+	int32 RoundsStoppedByCover[2] = { 0, 0 };
 };

@@ -12,6 +12,37 @@ void ASquadGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(ASquadGameState, VPHoldRequired);
 	DOREPLIFETIME(ASquadGameState, WinningTeam);
 	DOREPLIFETIME(ASquadGameState, VictoryReason);
+	DOREPLIFETIME(ASquadGameState, bBallistics);
+	DOREPLIFETIME(ASquadGameState, KillPoints);
+	DOREPLIFETIME(ASquadGameState, VPPoints);
+	DOREPLIFETIME(ASquadGameState, MatchElapsed);
+	DOREPLIFETIME(ASquadGameState, MatchTimeLimit);
+}
+
+void ASquadGameState::AddKillPoints(ESquadTeam Team, float Points)
+{
+	if (HasAuthority() && !IsMatchOver())
+	{
+		KillPoints[TeamIndex(Team)] += Points;
+		ForceNetUpdate();
+	}
+}
+
+void ASquadGameState::AddVPPoints(ESquadTeam Team, float Points)
+{
+	if (HasAuthority() && !IsMatchOver())
+	{
+		VPPoints[TeamIndex(Team)] += Points;
+	}
+}
+
+void ASquadGameState::SetMatchClock(float Elapsed, float Limit)
+{
+	if (HasAuthority())
+	{
+		MatchElapsed = Elapsed;
+		MatchTimeLimit = FMath::Max(0.f, Limit);
+	}
 }
 
 void ASquadGameState::AddKill(const FKillFeedEntry& Entry)
@@ -57,6 +88,7 @@ void ASquadGameState::MulticastKill_Implementation(const FKillFeedEntry& Entry)
 	{
 		return FString::Printf(TEXT("%s%s %s"), *P.Rank, P.Regiment.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" [%s]"), *P.Regiment), *P.Name);
 	}(Entry.Killer);
-	UE_LOG(LogTemp, Log, TEXT("KILL: %s -> %s %s (%s, %.1f%%)"), *Who, *Entry.Victim.Rank, *Entry.Victim.Name,
-		Entry.Method == EKillMethod::Grenade ? TEXT("grenade") : Entry.Method == EKillMethod::C4 ? TEXT("C4") : *Entry.WeaponName, Entry.ChancePercent);
+	UE_LOG(LogTemp, Log, TEXT("KILL: %s -> %s %s (%s%s, %.1f%%)"), *Who, *Entry.Victim.Rank, *Entry.Victim.Name,
+		Entry.Method == EKillMethod::Grenade ? TEXT("grenade") : Entry.Method == EKillMethod::C4 ? TEXT("C4") : *Entry.WeaponName,
+		Entry.bBledOut ? TEXT(", bled out") : TEXT(""), Entry.ChancePercent);
 }

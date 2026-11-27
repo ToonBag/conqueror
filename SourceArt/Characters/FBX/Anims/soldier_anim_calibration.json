@@ -568,6 +568,22 @@
    "seconds": 3.0,
    "loop": true
   },
+  "A_Cover_Peek_R_Stand_Fire": {
+   "seconds": 0.4,
+   "loop": false
+  },
+  "A_Cover_Peek_L_Stand_Fire": {
+   "seconds": 0.4,
+   "loop": false
+  },
+  "A_Cover_Peek_R_Crouch_Fire": {
+   "seconds": 0.4,
+   "loop": false
+  },
+  "A_Cover_Peek_L_Crouch_Fire": {
+   "seconds": 0.4,
+   "loop": false
+  },
   "A_Stunned": {
    "seconds": 2.0,
    "loop": true

@@ -8,6 +8,7 @@
 #include "SquadCameraPawn.h"
 #include "SquadGameState.h"
 #include "VictoryPoint.h"
+#include "WeaponData.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
@@ -406,7 +407,31 @@ void ASquadBot::UpdatePerception(float DeltaSeconds)
 			Mem.NoticeProgress = 0.f;
 			continue;
 		}
-		const bool bObservable = E->IsVisibleToTeam(Team) && IsOnScreen(E->GetActorLocation()) && !IsHiddenFromCamera(*E);
+		const bool bSpotted = E->IsVisibleToTeam(Team);
+		const bool bObservable = bSpotted && IsOnScreen(E->GetActorLocation()) && !IsHiddenFromCamera(*E);
+		// GDD §13: the minimap shows every enemy the team spots. A glance at it notices one off screen, more slowly.
+		if (bSpotted && !bObservable)
+		{
+			if (Mem.MapRequired < 0.f)
+			{
+				Mem.MapRequired = RandRange(MinimapNoticeTime);
+			}
+			Mem.MapProgress += DeltaSeconds;
+			if (Mem.MapProgress >= Mem.MapRequired)
+			{
+				Mem.bKnown = true;
+			}
+		}
+		else if (!bSpotted)
+		{
+			Mem.MapProgress = 0.f;
+			Mem.MapRequired = -1.f;
+		}
+		if (bSpotted && !bObservable && Mem.bKnown)
+		{
+			Mem.LastKnownCell = E->GetCurrentCell(); // Followed as a red dot.
+			Mem.LastSeenTime = T;
+		}
 		if (bObservable)
 		{
 			if (!Mem.bKnown)
@@ -716,6 +741,11 @@ void ASquadBot::Think(FSoldierBrain& Brain)
 		return;
 	}
 
+	if (Brain.bHeadDown && S->GetStance() != ESoldierStance::Prone)
+	{
+		Brain.bHeadDown = false; // Stood up by something else (an order, recovering from a stun).
+	}
+
 	if (S->IsMoving())
 	{
 		// Usually finish the move into position. Only a good shot with a long way to go may make the
@@ -726,23 +756,59 @@ void ASquadBot::Think(FSoldierBrain& Brain)
 			if (FMath::FRand() < HaltProbability && S->OrderStop())
 			{
 				OnOrderIssued();
+				return;
+			}
+		}
+		// Caught in the open with a long way still to go to a spot that has no cover either: a player sees the
+		// tracers and redirects the soldier into the nearest cover rather than let it walk on under fire.
+		if (!S->IsInjured() && S->IsUnderFire() && S->GetRemainingSteps() >= BreakForCoverMinSteps
+			&& Now() >= Brain.NextReposition && CanIssueOrder())
+		{
+			const FIntPoint ThreatCell = GetThreatCell(S->GetCurrentCell());
+			if (Grid->GetCoverAgainst(S->GetDestinationCell(), ThreatCell).Reduction <= 0.f)
+			{
+				TrySeekCover(Brain, ThreatCell);
 			}
 		}
 		return;
 	}
 
+	if (CanIssueOrder() && UpdateHeadDown(Brain, BestChance))
+	{
+		return;
+	}
+	if (Brain.bHeadDown)
+	{
+		return; // Keeping its head down behind cover until stress falls.
+	}
+
+	// Under fire in the open: get into cover unless it is winning the exchange from here. Without a target of
+	// its own (it can't see the shooter) there's nothing to gain by standing there.
+	if (!S->IsInjured() && S->IsUnderFire() && Now() >= Brain.NextReposition && CanIssueOrder()
+		&& (!S->GetAttackTarget() || S->GetCurrentHitChance() < SeekCoverHitChance))
+	{
+		const FIntPoint ThreatCell = GetThreatCell(S->GetCurrentCell());
+		const FCoverResult Cover = Grid->GetCoverAgainst(S->GetCurrentCell(), ThreatCell, S->GetActorRotation().Yaw);
+		if (Cover.Reduction <= 0.f && TrySeekCover(Brain, ThreatCell))
+		{
+			return;
+		}
+	}
+
 	if (S->GetAttackTarget())
 	{
-		// Fighting (soldiers fire on their own). Pinned in the open with poor shots: fall back to cover.
-		if (!S->IsInjured() && S->IsUnderFire() && Known.Num() > 0 && Now() >= Brain.NextReposition && CanIssueOrder()
-			&& S->GetCurrentHitChance() < SeekCoverHitChance)
+		// Fighting (soldiers fire on their own). Can't hit the enemy where it is: work round its cover.
+		if (CanIssueOrder() && TryFlank(Brain, BestChance))
 		{
-			const FIntPoint ThreatCell = GetThreatCell(S->GetCurrentCell());
-			const FCoverResult Cover = Grid->GetCoverAgainst(S->GetCurrentCell(), ThreatCell, S->GetActorRotation().Yaw);
-			if (Cover.Reduction <= 0.f)
-			{
-				TrySeekCover(Brain, ThreatCell);
-			}
+			return;
+		}
+		// Fire and movement: a soldier stopped on its way to the VP, trading poor shots, carries on to its next
+		// bound when it may (squad-mates covering it), unless it is too shaken to get up.
+		const bool bOnTheWay = Brain.bHasSlot && S->GetCurrentCell() != Brain.Slot;
+		if (bOnTheWay && !S->IsInjured() && S->GetCurrentHitChance() < AdvanceUnderFireShot
+			&& S->GetStressTier() < EStressTier::Major && CanIssueOrder())
+		{
+			HoldObjective(Brain);
 		}
 		return;
 	}
@@ -751,7 +817,210 @@ void ASquadBot::Think(FSoldierBrain& Brain)
 	{
 		return; // Injured: crawling only and can't capture, so hold and shoot what comes into view.
 	}
+	// Holding its slot with an enemy dug in nearby that it can't hit: work round it.
+	if (Brain.bHasSlot && S->GetCurrentCell() == Brain.Slot && TryFlank(Brain, BestChance))
+	{
+		return;
+	}
 	HoldObjective(Brain);
+}
+
+bool ASquadBot::StandUpToMove(ASoldier& Soldier)
+{
+	if (Soldier.GetStance() == ESoldierStance::Prone && !Soldier.IsInjured() && Soldier.OrderStance(ESoldierStance::Standing))
+	{
+		OnOrderIssued();
+		return true;
+	}
+	return false;
+}
+
+bool ASquadBot::UpdateHeadDown(FSoldierBrain& Brain, float BestChance)
+{
+	ASoldier* S = Brain.Soldier.Get();
+	if (!S || S->IsInjured())
+	{
+		Brain.bHeadDown = false;
+		return false;
+	}
+	const FIntPoint Cell = S->GetCurrentCell();
+	const FCoverResult Cover = Grid->GetCoverAgainst(Cell, GetThreatCell(Cell));
+	// GDD §9.3: lying right behind hay or a low wall hides a soldier from the front (and it sees nothing over it).
+	const bool bLowCover = Cover.Type == ECoverType::Soft || Cover.Type == ECoverType::LowWall;
+
+	if (!Brain.bHeadDown)
+	{
+		if (bLowCover && S->GetStress() >= HeadDownStress && BestChance < HeadDownMaxShot && S->GetStance() != ESoldierStance::Prone
+			&& S->OrderStance(ESoldierStance::Prone))
+		{
+			Brain.bHeadDown = true;
+			OnOrderIssued();
+			return true;
+		}
+		return false;
+	}
+	// Recovered, or the cover no longer faces the threat (flanked): get up.
+	if ((S->GetStress() <= HeadUpStress || !bLowCover) && S->OrderStance(ESoldierStance::Standing))
+	{
+		Brain.bHeadDown = false;
+		OnOrderIssued();
+		return true;
+	}
+	return false;
+}
+
+bool ASquadBot::IsCautious(const ASoldier& Soldier) const
+{
+	TArray<TPair<ASoldier*, FIntPoint>> Known;
+	GetKnownEnemies(Known);
+	if (Known.Num() > 0 || Soldier.IsUnderFire())
+	{
+		return true;
+	}
+	// The enemy is heading for the same VPs: near one this team doesn't hold, expect them.
+	const FVector Here = Soldier.GetActorLocation();
+	for (const TWeakObjectPtr<AVictoryPoint>& Weak : VictoryPoints)
+	{
+		const AVictoryPoint* VP = Weak.Get();
+		if (VP && (!VP->IsOwnedBy(Team) || VP->IsContested())
+			&& FVector::Dist2D(Here, Grid->CellToWorld(VP->GetMinCell() + FIntPoint(VP->SizeX / 2, VP->SizeY / 2))) <= CautionRadius * UUPerMetre)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ASquadBot::ShouldHoldForOverwatch(const ASoldier& Soldier) const
+{
+	if (!IsCautious(Soldier))
+	{
+		return false; // No contact expected: everyone moves.
+	}
+	int32 Able = 0;
+	int32 Moving = 0;
+	for (const FSoldierBrain& Brain : Brains)
+	{
+		const ASoldier* Mate = Brain.Soldier.Get();
+		if (!CanHoldGround(Mate))
+		{
+			continue;
+		}
+		++Able;
+		if (Mate != &Soldier && Mate->IsMoving())
+		{
+			++Moving;
+		}
+	}
+	const int32 MaxMoving = FMath::Max(1, FMath::FloorToInt(Able * MaxMovingFraction));
+	return Moving >= MaxMoving;
+}
+
+bool ASquadBot::TryFlank(FSoldierBrain& Brain, float BestChance)
+{
+	ASoldier* S = Brain.Soldier.Get();
+	const float T = Now();
+	if (!S || S->IsInjured() || S->IsShocked() || T < Brain.NextFlank || T < Brain.FlankUntil || BestChance >= FlankShotChance
+		|| S->GetStressTier() >= EStressTier::Major)
+	{
+		return false;
+	}
+	// One flanker per squad at a time; the others hold the VP.
+	for (const FSoldierBrain& Other : Brains)
+	{
+		if (&Other != &Brain && T < Other.FlankUntil && CanHoldGround(Other.Soldier.Get()))
+		{
+			return false;
+		}
+	}
+
+	// The nearest recently seen enemy that its cover protects from here.
+	const UWeaponData* Weapon = S->GetWeaponData();
+	const float MaxRange = Weapon ? Weapon->LongRangeMax : 40.f;
+	const FIntPoint From = S->GetCurrentCell();
+	const ASoldier* Target = nullptr;
+	FIntPoint TargetCell = FIntPoint::ZeroValue;
+	float TargetDistance = TNumericLimits<float>::Max();
+	for (const FEnemyMemory& Mem : Memory)
+	{
+		const ASoldier* E = Mem.Soldier.Get();
+		if (!Mem.bKnown || !E || E->IsDead() || T - Mem.LastSeenTime > MaxGrenadeIntelAge)
+		{
+			continue;
+		}
+		const float D = CellDistance(From, Mem.LastKnownCell);
+		if (D > MaxRange || D >= TargetDistance || Grid->GetCoverAgainst(Mem.LastKnownCell, From).Reduction <= 0.f)
+		{
+			continue;
+		}
+		Target = E;
+		TargetCell = Mem.LastKnownCell;
+		TargetDistance = D;
+	}
+	if (!Target || !Weapon)
+	{
+		return false;
+	}
+
+	const UCoverData* CoverData = Grid->GetCoverData();
+	const float EyeHeight = CoverData->StandingSightHeight;
+	const float TargetHeight = CoverData->GetSightHeight(Target->GetEffectiveStance());
+	const float StunRadius = S->GetSoldierData()->GrenadeStunRadius;
+	FIntPoint BestCell = FIntPoint::ZeroValue;
+	float BestScore = BestChance + 20.f; // Only worth the walk for a clearly better shot.
+	bool bFound = false;
+	for (int32 DY = -FlankSearchRadius; DY <= FlankSearchRadius; ++DY)
+	{
+		for (int32 DX = -FlankSearchRadius; DX <= FlankSearchRadius; ++DX)
+		{
+			const FIntPoint Cell = From + FIntPoint(DX, DY);
+			const float Walk = CellDistance(Cell, From);
+			if (Walk < 2.f || Walk > FlankSearchRadius)
+			{
+				continue;
+			}
+			const float Range = CellDistance(Cell, TargetCell);
+			if (Range > MaxRange || Range < StunRadius + 3.f)
+			{
+				continue; // Out of range, or so close that it's a charge.
+			}
+			if (Grid->GetCoverAgainst(TargetCell, Cell).Reduction > 0.f || !Grid->IsCellFreeAsDestination(Cell, S) || IsSlotTaken(Cell, S)
+				|| !Grid->HasLineOfSight(Cell, TargetCell, EyeHeight, TargetHeight) || !S->IsCohesiveDestination(Cell))
+			{
+				continue;
+			}
+			// A clean shot, ideally from cover of its own, without a long walk across the enemy's front.
+			const float Score = Weapon->GetAccuracyAtRange(Range) + Grid->GetCoverAgainst(Cell, TargetCell).Reduction * 0.5f - Walk * 3.f;
+			if (Score > BestScore)
+			{
+				BestScore = Score;
+				BestCell = Cell;
+				bFound = true;
+			}
+		}
+	}
+	Brain.NextFlank = T + 4.f; // Nothing found: look again in a moment.
+	if (!bFound || IsRouteWatched(*S, BestCell))
+	{
+		return false; // Nowhere better, or getting there means walking across another enemy's sights.
+	}
+	if (StandUpToMove(*S))
+	{
+		Brain.NextFlank = T; // Up first (prone soldiers crawl); go on the next decision.
+		return true;
+	}
+	if (!S->MoveToCell(BestCell))
+	{
+		return false;
+	}
+	OnOrderIssued();
+	Brain.Slot = BestCell;
+	Brain.bHasSlot = true;
+	Brain.bBounding = false;
+	Brain.bFacedAfterArriving = false;
+	Brain.FlankUntil = T + FlankHoldTime;
+	Brain.NextFlank = T + FlankCooldown;
+	return true;
 }
 
 bool ASquadBot::TryTreatSquadMate(FSoldierBrain& Brain)
@@ -774,9 +1043,26 @@ bool ASquadBot::TryTreatSquadMate(FSoldierBrain& Brain)
 			continue;
 		}
 		const float Distance = FVector::Dist2D(S->GetActorLocation(), Patient->GetActorLocation());
-		if (Distance > MaxDistance || Distance >= BestDistance)
+		// GDD §5.1: a squad-mate close to bleeding out is worth a longer walk, if the medic can still make it.
+		const float BleedLeft = Patient->GetBleedOutRemaining();
+		const bool bUrgent = BleedLeft > 0.f && BleedLeft <= UrgentBleedOutTime;
+		const float Reach = bUrgent ? FMath::Max(MaxDistance, UrgentMedicDistance * 100.f) : MaxDistance;
+		if (Distance > Reach || Distance >= BestDistance)
 		{
 			continue;
+		}
+		if (BleedLeft > 0.f)
+		{
+			const USoldierData* Data = S->GetSoldierData();
+			const float WalkSeconds = Distance / FMath::Max(1.f, S->GetCurrentMoveSpeed());
+			if (WalkSeconds + Data->MedkitChannelTime > BleedLeft)
+			{
+				continue; // Can't arrive and finish before it bleeds out.
+			}
+		}
+		if (IsRouteWatched(*S, Patient->GetCurrentCell()))
+		{
+			continue; // Lying in an enemy's sights: wait until that enemy is pinned down or gone.
 		}
 		// Leave it to a closer squad-mate that could go (it gets its own turn to decide).
 		bool bCloserMedic = false;
@@ -975,11 +1261,15 @@ bool ASquadBot::TryThrowGrenade(FSoldierBrain& Brain)
 bool ASquadBot::TrySeekCover(FSoldierBrain& Brain, FIntPoint ThreatCell)
 {
 	ASoldier* S = Brain.Soldier.Get();
-	Brain.NextReposition = Now() + 4.f;
 	if (!S || S->IsShocked())
 	{
 		return false;
 	}
+	if (StandUpToMove(*S))
+	{
+		return true; // Up first (prone soldiers crawl); it runs for cover on the next decision.
+	}
+	Brain.NextReposition = Now() + 4.f;
 	const FIntPoint From = S->GetCurrentCell();
 
 	FIntPoint BestCell = FIntPoint::ZeroValue;
@@ -1020,6 +1310,13 @@ bool ASquadBot::TrySeekCover(FSoldierBrain& Brain, FIntPoint ThreatCell)
 		{
 			Brain.Slot = BestCell;
 			Brain.bHasSlot = true;
+			Brain.bBounding = false;
+		}
+		else
+		{
+			// Out of the VP: treat the cover as a bound stop, so it waits there before moving on.
+			Brain.bBounding = true;
+			Brain.BoundCell = BestCell;
 		}
 		Brain.bFacedAfterArriving = false;
 		return true;
@@ -1036,13 +1333,25 @@ void ASquadBot::HoldObjective(FSoldierBrain& Brain)
 		return;
 	}
 
-	if (!Brain.bHasSlot || !VP->ContainsCell(Brain.Slot) || IsSlotTaken(Brain.Slot, S))
+	const float T = Now();
+	const bool bFlanking = T < Brain.FlankUntil;
+	if (!Brain.bHasSlot || (!bFlanking && !VP->ContainsCell(Brain.Slot)) || IsSlotTaken(Brain.Slot, S))
 	{
+		Brain.FlankUntil = 0.f;
 		if (!PickSlot(Brain))
 		{
 			return;
 		}
 	}
+
+	// Arrived at the end of a bound: wait in that cover a moment (longer in contact) before the next one.
+	if (Brain.bBounding && S->GetCurrentCell() == Brain.BoundCell)
+	{
+		Brain.bBounding = false;
+		Brain.NextBound = T + RandRange(IsCautious(*S) ? BoundPauseContact : BoundPauseQuiet);
+		return;
+	}
+	Brain.bBounding = false;
 
 	if (S->GetCurrentCell() == Brain.Slot)
 	{
@@ -1059,24 +1368,161 @@ void ASquadBot::HoldObjective(FSoldierBrain& Brain)
 		return;
 	}
 
-	if (Now() < Brain.NextHoldRetry)
+	if (T < Brain.NextHoldRetry || T < Brain.NextBound)
 	{
-		return; // Held short by the squad cohesion limit: wait for the squad to close up.
+		return; // Held short by the squad cohesion limit, or pausing in cover between bounds.
+	}
+	if (ShouldHoldForOverwatch(*S))
+	{
+		return; // Enough squad-mates on the move: stay put and cover them.
+	}
+	// Long way to go: move from cover to cover rather than straight across the open.
+	FIntPoint Goal = Brain.Slot;
+	FIntPoint BoundCell = FIntPoint::ZeroValue;
+	const bool bBound = !bFlanking && PickBoundCell(Brain, Brain.Slot, BoundCell);
+	if (bBound)
+	{
+		Goal = BoundCell;
+	}
+	if (IsRouteWatched(*S, Goal))
+	{
+		Brain.NextBound = T + RandRange(BoundPauseContact) * 0.5f; // Wait for squad-mates to pin that enemy down.
+		return;
+	}
+	if (StandUpToMove(*S))
+	{
+		return; // Prone soldiers crawl: get up first, move on the next decision.
 	}
 	Brain.bFacedAfterArriving = false;
-	if (S->MoveToCell(Brain.Slot))
+	if (S->MoveToCell(Goal))
 	{
 		OnOrderIssued();
-		if (S->GetDestinationCell() != Brain.Slot)
+		if (bBound)
 		{
-			Brain.NextHoldRetry = Now() + 3.f; // Stopped at the cohesion limit (GDD §4.3).
+			Brain.bBounding = true;
+			Brain.BoundCell = S->GetDestinationCell();
 		}
+		else if (S->GetDestinationCell() != Brain.Slot)
+		{
+			Brain.NextHoldRetry = T + 3.f; // Stopped at the cohesion limit (GDD §4.3).
+		}
+	}
+	else if (!bBound)
+	{
+		Brain.bHasSlot = false; // Unreachable or just taken: pick another next time.
+		Brain.NextHoldRetry = T + 1.f;
 	}
 	else
 	{
-		Brain.bHasSlot = false; // Unreachable or just taken: pick another next time.
-		Brain.NextHoldRetry = Now() + 1.f;
+		Brain.NextBound = T + 1.f; // That bound didn't work out: try again (or go straight) shortly.
 	}
+}
+
+bool ASquadBot::IsRouteWatched(const ASoldier& Soldier, FIntPoint Goal) const
+{
+	const float T = Now();
+	const FIntPoint From = Soldier.GetCurrentCell();
+	const FIntPoint Mid = (From + Goal) / 2;
+	const float Eye = Grid->GetCoverData()->StandingSightHeight;
+	for (const FEnemyMemory& Mem : Memory)
+	{
+		const ASoldier* E = Mem.Soldier.Get();
+		// Only enemies it is watching right now, and only ones free to shoot: one being fired at (the player sees
+		// the tracers going in) or shaken is pinned, which is when the squad moves.
+		if (!Mem.bKnown || !E || E->IsDowned() || T - Mem.LastSeenTime > 1.f || E->IsUnderFire()
+			|| E->GetStressTier() >= EStressTier::Major)
+		{
+			continue;
+		}
+		const UWeaponData* Weapon = E->GetWeaponData();
+		const float Range = Weapon ? Weapon->LongRangeMax : 40.f;
+		const FIntPoint EnemyCell = Mem.LastKnownCell;
+		const float EnemyEye = Grid->GetCoverData()->GetSightHeight(E->GetEffectiveStance());
+		for (const FIntPoint& Cell : { Mid, Goal })
+		{
+			if (CellDistance(Cell, EnemyCell) <= Range && Grid->GetCoverAgainst(Cell, EnemyCell).Reduction <= 0.f
+				&& Grid->HasLineOfSight(EnemyCell, Cell, EnemyEye, Eye))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool ASquadBot::PickBoundCell(const FSoldierBrain& Brain, FIntPoint Goal, FIntPoint& OutCell) const
+{
+	const ASoldier* S = Brain.Soldier.Get();
+	if (!S)
+	{
+		return false;
+	}
+	const bool bCautious = IsCautious(*S);
+	const float MaxLeg = bCautious ? BoundLength.Y : BoundLength.X;
+	const FIntPoint From = S->GetCurrentCell();
+	const float ToGoal = CellDistance(From, Goal);
+	// Nearly there: go straight in. Expecting the enemy, even the last stretch goes from cover to cover.
+	if (ToGoal <= (bCautious ? 3.f : MaxLeg + 2.f))
+	{
+		return false;
+	}
+	const FIntPoint ThreatCell = GetThreatCell(From);
+
+	struct FLeg
+	{
+		FIntPoint Cell;
+		float Score;
+		float Distance;
+	};
+	TArray<FLeg> Legs;
+	const int32 R = FMath::CeilToInt(MaxLeg);
+	for (int32 DY = -R; DY <= R; ++DY)
+	{
+		for (int32 DX = -R; DX <= R; ++DX)
+		{
+			const FIntPoint Cell = From + FIntPoint(DX, DY);
+			const float D = CellDistance(Cell, From);
+			if (D < 2.f || D > MaxLeg)
+			{
+				continue;
+			}
+			const float Progress = ToGoal - CellDistance(Cell, Goal);
+			if (Progress < D * 0.5f)
+			{
+				continue; // Mostly sideways or backwards.
+			}
+			const float Reduction = Grid->GetCoverAgainst(Cell, ThreatCell).Reduction;
+			if (Reduction <= 0.f || !Grid->IsCellFreeAsDestination(Cell, S) || IsSlotTaken(Cell, S) || !S->IsCohesiveDestination(Cell))
+			{
+				continue;
+			}
+			float Score = Reduction + Progress * 4.f;
+			// Don't bunch up behind the same wall (one grenade).
+			for (const FSoldierBrain& Other : Brains)
+			{
+				const ASoldier* Mate = Other.Soldier.Get();
+				if (Mate && Mate != S && !Mate->IsDead() && CellDistance(Cell, Mate->GetDestinationCell()) < 2.5f)
+				{
+					Score -= 30.f;
+				}
+			}
+			Legs.Add({ Cell, Score, D });
+		}
+	}
+	Legs.Sort([](const FLeg& A, const FLeg& B) { return A.Score > B.Score; });
+
+	// The best few, checking the walk there isn't a long detour round a building.
+	TArray<FIntPoint> Path;
+	for (int32 i = 0; i < FMath::Min(Legs.Num(), 4); ++i)
+	{
+		Path.Reset();
+		if (Grid->FindPath(From, Legs[i].Cell, S, Path) && Path.Num() <= FMath::CeilToInt(Legs[i].Distance * 1.5f) + 2)
+		{
+			OutCell = Legs[i].Cell;
+			return true;
+		}
+	}
+	return false;
 }
 
 bool ASquadBot::PickSlot(FSoldierBrain& Brain)
@@ -1128,6 +1574,17 @@ bool ASquadBot::PickSlot(FSoldierBrain& Brain)
 float ASquadBot::ScoreHoldCell(FIntPoint Cell, const ASoldier& Soldier, FIntPoint ThreatCell) const
 {
 	float Score = Grid->GetCoverAgainst(Cell, ThreatCell).Reduction;
+
+	// A firing position, not just a hiding place: prefer cells that see where the enemy is (within rifle range).
+	const UWeaponData* Weapon = Soldier.GetWeaponData();
+	if (Weapon && CellDistance(Cell, ThreatCell) <= Weapon->LongRangeMax)
+	{
+		const float Eye = Grid->GetCoverData()->StandingSightHeight;
+		if (Grid->HasLineOfSight(Cell, ThreatCell, Eye, Eye))
+		{
+			Score += FieldOfFireBonus;
+		}
+	}
 
 	// Spread out so one grenade can't catch two soldiers.
 	for (const FSoldierBrain& Other : Brains)

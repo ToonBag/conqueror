@@ -5,6 +5,7 @@ Run with any Python 3 (UE ships one):
       Scripts/Tests/analyze_match_stats.py [Saved/MatchStats] [--since 20261123-1550] [--out report.md]
 
 Writes Markdown to stdout (or --out). Records come from Scripts/AIMatchBatch.ps1 (squad.MatchStats 1).
+The Rushes section needs the _track.csv position samples (records from GDD v0.62 on).
 """
 import argparse
 import csv
@@ -32,6 +33,88 @@ def band(d):
 
 BANDS = ["0-5 m", "5-15 m", "15-30 m", "30-50 m", "50+ m"]
 
+# Rush detection (GDD §11.2), from the _track.csv position samples.
+RUSH_FAR_M = 15.0        # an approach starts from further than this from the nearest active enemy
+RUSH_CLOSE_M = 10.0      # ... and ends once within this
+RUSH_MAX_S = 15.0        # ... taking at most this long
+RUSH_MOVING_FRAC = 0.6   # a rush moves for at least this share of the approach
+RUSH_SPOTTED_FRAC = 0.5  # ... and is seen by the enemy for at least this share (open ground)
+RUSH_RESULT_S = 20.0     # after arriving, how long it has to injure or kill an enemy
+
+
+def find_approaches(track, shots, events):
+    """Approaches into close range, per soldier. Returns dicts: soldier, team, kind ("rush" / "covered"),
+    seconds, result ("won" / "lost" / "none"), traded (went down after winning, inside the window)."""
+    by_time = defaultdict(list)
+    for r in track:
+        by_time[r["time"]].append(r)
+    times = sorted(by_time, key=float)
+    # Per soldier, its samples in time order with the distance to the nearest active enemy.
+    per = defaultdict(list)
+    pos = {}  # (time, soldier) -> (x, y)
+    for t in times:
+        rows = by_time[t]
+        for r in rows:
+            pos[(t, r["soldier"])] = (int(r["x"]), int(r["y"]))
+        for r in rows:
+            x, y = pos[(t, r["soldier"])]
+            ex = [(((x - int(e["x"])) ** 2 + (y - int(e["y"])) ** 2) ** 0.5, e["soldier"]) for e in rows
+                  if e["team"] != r["team"] and e["state"] == "active"]
+            d, nearest = min(ex) if ex else (1e9, None)
+            r["_t"], r["_nearest"] = t, nearest
+            per[r["soldier"]].append((float(t), d, r))
+    dist = lambda a, b: ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+    # Scoring: rifle injuries/kills (shots) and grenade/C4 kills (death events) by each soldier.
+    scored = defaultdict(list)
+    for s in shots:
+        if s.get("outcome") in ("injured", "killed"):
+            scored[s["shooter"]].append(float(s["time"]))
+    for e in events:
+        parts = e.split()
+        if len(parts) >= 5 and parts[1] == "death" and parts[3] == "by" and "rifle" not in e and "bled_out" not in e:
+            scored[parts[4]].append(float(parts[0]))
+    out = []
+    for sid, samples in per.items():
+        last_seen = samples[-1][0]
+        last_far = None
+        armed = True  # one approach per trip in; re-armed once it is far from every enemy again
+        for i, (t, d, r) in enumerate(samples):
+            if r["state"] != "active":
+                last_far = None  # an approach doesn't run through being injured or stunned
+                continue
+            if d > RUSH_FAR_M:
+                last_far, armed = i, True
+            elif d <= RUSH_CLOSE_M and armed and last_far is not None and t - samples[last_far][0] <= RUSH_MAX_S:
+                armed = False
+                window = samples[last_far:i + 1]
+                # Who closed the gap? Measured against the enemy it ends up nearest: the soldier's own move towards
+                # where that enemy ended, against that enemy's move towards where the soldier ended. Skipped when
+                # the enemy did more of it (being walked up to is not a rush).
+                t0, enemy = window[0][2]["_t"], r["_nearest"]
+                e0, e1 = pos.get((t0, enemy)), pos.get((r["_t"], enemy))
+                s0, s1 = pos[(t0, sid)], pos[(r["_t"], sid)]
+                if e0 and e1 and dist(s0, e1) - dist(s1, e1) < dist(s1, e0) - dist(s1, e1):
+                    continue
+                moving = sum(w[2]["moving"] == "1" for w in window) / len(window)
+                spotted = sum(w[2]["spotted"] == "1" for w in window) / len(window)
+                kind = "rush" if moving >= RUSH_MOVING_FRAC and spotted >= RUSH_SPOTTED_FRAC else "covered"
+                start, end = samples[last_far][0], t + RUSH_RESULT_S
+                # Down = not active any more, or gone from the track (dead) before the match's last sample.
+                down = next((u for u, _, w in samples[i + 1:] if w["state"] != "active"), None)
+                if down is None and last_seen < float(times[-1]):
+                    down = last_seen + 0.5
+                won = next((s for s in sorted(scored[sid]) if start <= s <= end), None)
+                if won is not None and (down is None or won <= down):
+                    result = "won"
+                elif down is not None and down <= end:
+                    result = "lost"
+                else:
+                    result = "none"
+                traded = result == "won" and down is not None and down <= end
+                out.append({"soldier": sid, "team": r["team"], "kind": kind, "seconds": t - start,
+                            "result": result, "traded": traded})
+    return out
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -49,12 +132,19 @@ def main():
             m = json.load(fh)
         m["_file"] = os.path.basename(f)
         matches.append(m)
+        m["_shots"] = []
         csv_path = f[:-5] + "_shots.csv"
         if os.path.exists(csv_path):
             with open(csv_path, encoding="utf-8") as fh:
                 for r in csv.DictReader(fh):
                     r["seed"] = m["seed"]
                     shots.append(r)
+                    m["_shots"].append(r)
+        track_path = f[:-5] + "_track.csv"  # records before GDD v0.62 have none
+        m["_track"] = None
+        if os.path.exists(track_path):
+            with open(track_path, encoding="utf-8") as fh:
+                m["_track"] = list(csv.DictReader(fh))
 
     out = []
     p = out.append
@@ -68,8 +158,8 @@ def main():
 
     # ---- Results
     p("## Results\n")
-    p("| Seed | Winner | How | Length | Allies alive | Axis alive | Allies injured | Axis injured | VPs at end |")
-    p("|---|---|---|---|---|---|---|---|---|")
+    p("| Seed | Winner | How | Length | Allies alive | Axis alive | Allies injured | Axis injured | VPs at end | Score (Al-Ax) |")
+    p("|---|---|---|---|---|---|---|---|---|---|")
     for m in matches:
         alive = Counter(); inj = Counter()
         for s in m["soldiers"]:
@@ -78,8 +168,10 @@ def main():
             if s["end_state"] == "injured":
                 inj[s["team"]] += 1
         vps = " ".join(f"{k}:{v[:2]}" for k, v in sorted(m["vp_owners"].items()))
+        score = m.get("score")  # GDD §11 points; older records have none
+        pts = f"{score['Allies']}-{score['Axis']}" if score else "-"
         p(f"| {m['seed']} | {m['winner']} | {m['reason']} | {m['duration_s'] / 60:.1f} min | {alive['Allies']} | {alive['Axis']} "
-          f"| {inj['Allies']} | {inj['Axis']} | {vps} |")
+          f"| {inj['Allies']} | {inj['Axis']} | {vps} | {pts} |")
     wins = Counter(m["winner"] for m in matches)
     reasons = Counter(m["reason"] for m in matches)
     p(f"\nAllies {wins['Allies']} - Axis {wins['Axis']} - no result {wins['none']}.  "
@@ -213,6 +305,52 @@ def main():
     first_caps = [float(e.split()[0]) for m in matches for e in m["events"] if " capture " in e]
     if first_caps:
         p(f"- First capture at {min(first_caps):.1f} s.")
+
+    # ---- Rushes
+    tracked = [m for m in matches if m["_track"]]
+    p("\n## Rushes\n")
+    if not tracked:
+        p("- No position tracks in these records (recorded before GDD v0.62).")
+    else:
+        apps = [a for m in tracked for a in find_approaches(m["_track"], m["_shots"], m["events"])]
+        p(f"An approach is a soldier closing from over {RUSH_FAR_M:.0f} m to within {RUSH_CLOSE_M:.0f} m of the nearest active enemy "
+          f"in {RUSH_MAX_S:.0f} s or less, having done at least half the closing itself (being walked up to doesn't count). It is a **rush** if the soldier was moving for {RUSH_MOVING_FRAC:.0%} of it and seen by the "
+          f"enemy for {RUSH_SPOTTED_FRAC:.0%} of it, otherwise a **covered** approach. **Won**: it injured or killed an enemy (rifle, "
+          f"grenade or C4 kill) from the start of the approach to {RUSH_RESULT_S:.0f} s after arriving, before going down itself. "
+          f"**Lost**: it was injured, stunned or killed first. **Traded**: won, then went down inside the window. "
+          f"Grenade stuns are not credited. {len(tracked)} of {n} matches have tracks.\n")
+        p("| Approach | Side | Count | Per match | Won | Lost | Neither | Traded | Mean time 15 to 10 m |")
+        p("|---|---|---|---|---|---|---|---|---|")
+        for kind in ("rush", "covered"):
+            for side in ("All", "Allies", "Axis"):
+                xs = [a for a in apps if a["kind"] == kind and side in ("All", a["team"])]
+                if not xs:
+                    continue
+                res = Counter(a["result"] for a in xs)
+                p(f"| {kind} | {side} | {len(xs)} | {len(xs) / len(tracked):.1f} | {pct(res['won'], len(xs))} | {pct(res['lost'], len(xs))} "
+                  f"| {pct(res['none'], len(xs))} | {pct(sum(a['traded'] for a in xs), len(xs))} | {mean([a['seconds'] for a in xs]):.1f} s |")
+        rush = [a for a in apps if a["kind"] == "rush"]
+        if rush:
+            won = sum(a["result"] == "won" for a in rush)
+            lost = sum(a["result"] == "lost" for a in rush)
+            p(f"\n- Rush success (won / (won + lost)): {pct(won, won + lost)}. Above 50% means charging across open ground pays.")
+
+        # ---- Exposure: how the soldiers spend their time while the enemy can see them (bot tactics, GDD §11.1).
+        p("\n## Exposure\n")
+        p("Share of position samples of active soldiers. **Seen** = spotted by the enemy. **In cover** = leaning on cover.\n")
+        p("| Side | Samples | Seen | Seen, in the open | Seen, moving | Under fire | Under fire, in the open | Prone (active) |")
+        p("|---|---|---|---|---|---|---|---|")
+        for side in ("All", "Allies", "Axis"):
+            rows = [r for m in tracked for r in m["_track"] if r["state"] == "active" and side in ("All", r["team"])]
+            if not rows:
+                continue
+            seen = [r for r in rows if r["spotted"] == "1"]
+            fire = [r for r in rows if r["under_fire"] == "1"]
+            p(f"| {side} | {len(rows)} | {pct(len(seen), len(rows))} "
+              f"| {pct(sum(r['leaning_on_cover'] != '1' for r in seen), len(rows))} "
+              f"| {pct(sum(r['moving'] == '1' for r in seen), len(rows))} | {pct(len(fire), len(rows))} "
+              f"| {pct(sum(r['leaning_on_cover'] != '1' for r in fire), len(rows))} "
+              f"| {pct(sum(r['stance'] == 'prone' for r in rows), len(rows))} |")
 
     text = "\n".join(out) + "\n"
     if a.out:

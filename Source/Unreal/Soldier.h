@@ -7,7 +7,10 @@
 #include "LootTypes.h"
 #include "KillFeedTypes.h"
 #include "BuildableTypes.h"
+#include "BallisticsTypes.h"
 #include "Soldier.generated.h"
+
+struct FBallisticRound;
 
 class ABreachableWall;
 class ASoldier;
@@ -33,6 +36,8 @@ struct FKillCause
 	const UWeaponData* Weapon = nullptr;
 	/** Chance (percent) of the roll that killed: the shot's final hit chance, or the grenade kill chance. */
 	float ChancePercent = 0.f;
+	/** GDD §5.1: died of an untreated injury. Killer, method, weapon and chance are those of the injuring hit. */
+	bool bBledOut = false;
 };
 
 /** How likely a shot from one soldier at another is to hit, and why (GDD §5.3, §9). */
@@ -52,11 +57,43 @@ struct FHitChanceInfo
 	bool bInRange = false;
 	bool bLineOfSight = true;
 
+	// Projectile model (squad.Ballistics 1, GDD §16). FinalChance is then an estimate from sampled rounds.
+	bool bBallistic = false;
+	/** Share of the target's body (area-weighted) the shooter's muzzle has a clear line to, percent. */
+	float ExposurePercent = 0.f;
+	/** Shooter's one-sigma spread right now (mrad), recoil included. */
+	float SpreadMrad = 0.f;
+	/** Shooter rests its rifle on low cover. */
+	bool bBraced = false;
+	/** Where the shooter aims: the centre of the target's most visible body part. */
+	FVector AimPoint = FVector::ZeroVector;
+	EHitPart AimPart = EHitPart::Chest;
+
 	bool CanFire() const { return bInRange && bLineOfSight; }
 
 	/** e.g. "65% -50 LOW WALL = 15%", "85% EXPOSED", "NO LINE OF SIGHT". */
 	FString Describe() const;
 };
+
+/**
+ * One resolved rifle or machine-gun round, reported on the server for demos and tests (ASoldier::OnShotResolved).
+ * Roll model: Outcome is "hit" or "miss". Projectile model (GDD §16): "injured" / "killed" / "none" when it hit the
+ * soldier aimed at, else "miss_cover", "miss_ground", "miss_lost", "stray_enemy" or "friendly".
+ */
+struct FSoldierShotReport
+{
+	const ASoldier* Shooter = nullptr;
+	const ASoldier* Target = nullptr;
+	/** Soldier the round actually hit (null on a miss). */
+	const ASoldier* Victim = nullptr;
+	bool bHitTarget = false;
+	FHitChanceInfo Chance;
+	/** Body part hit (projectile model only). */
+	EHitPart Part = EHitPart::Chest;
+	FString Outcome;
+};
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnSoldierShotResolved, const FSoldierShotReport&);
 
 /**
  * Everything a client needs to show a soldier: the server copies its live fields in here every tick
@@ -82,6 +119,7 @@ struct FSoldierNetState
 	UPROPERTY() bool bInjured = false;
 	UPROPERTY() bool bDead = false;
 	UPROPERTY() float StunRemaining = 0.f;
+	UPROPERTY() float BleedOutRemaining = 0.f;
 	UPROPERTY() float Stress = 0.f;
 	UPROPERTY() bool bSpottedByEnemy = false;
 	UPROPERTY() TObjectPtr<APlayerState> OwningPlayer;
@@ -306,6 +344,9 @@ public:
 
 	/** Stress gained from incoming fire and cross-fire since the last reset, before the 100 cap. */
 	float GetStressReceivedTotal() const { return StressReceivedTotal; }
+
+	/** Server: every resolved rifle / MG round of every soldier (debug, demos, tests; nothing in the game binds it). */
+	static FOnSoldierShotResolved OnShotResolved;
 
 	/** Debug: zeroes the counters above. */
 	void DebugResetCombatStats() { HitsLanded = 0; RoundsFiredStat = 0; StressReceivedTotal = 0.f; }
@@ -740,6 +781,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
 	float GetStunRemaining() const { return StunRemaining; }
+	/** GDD §5.1: seconds until this injured soldier bleeds out (0 when not injured or bleed-out is off). */
+	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
+	float GetBleedOutRemaining() const { return BleedOutRemaining; }
+	/** True while the bleed-out timer is paused because a medic is applying a medkit to this soldier. */
+	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
+	bool IsBleedOutPaused() const;
+	/** Walking speed in its current posture (cm/s). */
+	float GetCurrentMoveSpeed() const;
 
 	UFUNCTION(BlueprintPure, Category = "Soldier|HUD")
 	bool IsReloading() const { return bReloading; }
@@ -792,6 +841,32 @@ public:
 
 	/** Show a line of text on this soldier's status label for the next fraction of a second (hover readouts). */
 	void ShowHitPreview(const FString& Text);
+
+	// ---------------------------------------------------------------- Projectile model (GDD §16, SoldierBallistics.cpp)
+
+	/**
+	 * Resting the rifle on low cover (hay, low wall, window sill): projectile model only, standing still, facing
+	 * the cover, not prone. OutCoverTop: height of the cover's top above the ground; OutTowardCover: unit vector.
+	 */
+	bool IsBraced(float* OutCoverTop = nullptr, FVector* OutTowardCover = nullptr) const;
+
+	/** Posture to animate: crouched while braced, else GetEffectiveStance. */
+	ESoldierStance GetPostureStance() const;
+
+	/** World-space hit spheres for the current posture (same on server and clients). Empty when dead. */
+	void GetHitShapes(FBallisticShapes& OutShapes) const;
+
+	/** Where this soldier's rounds start when firing towards Toward (analytic, so it works on a dedicated server). */
+	FVector GetBallisticMuzzle(const FVector& Toward) const;
+
+	/** One-sigma angular error of the next round (mrad): weapon x posture x stress x injury + recoil. */
+	float GetBallisticSpreadMrad() const;
+
+	/** Server: a round fired by this soldier stopped (or ran out of range). Applies hits, stats and the tracer. */
+	void OnBallisticRoundResolved(const FBallisticRound& Round, const FBallisticTrace& Hit);
+
+	/** Server: an enemy round passed close by (GDD §16 stress), scaled by the firing weapon's StressScale. */
+	void OnBallisticNearMiss(const ASoldier* Shooter, float StressScale);
 
 protected:
 	virtual void BeginPlay() override;
@@ -934,7 +1009,6 @@ private:
 	void FaceCamera(UTextRenderComponent* Label) const;
 	/** False on a dedicated server, which doesn't load the (cosmetic) text labels: text has no font there. */
 	bool HasLabels() const { return NumberLabel && StatusLabel && HoldFireLabel && MoveMarkerLabel; }
-	float GetCurrentMoveSpeed() const;
 	void FollowDragger(FIntPoint Cell);
 	void UpdateDrag();
 
@@ -959,6 +1033,8 @@ private:
 	float Stress = 0.f;
 	/** Seconds left before stress starts to decay again. */
 	float StressDecayHold = 0.f;
+	/** Stress on squad-mates near this soldier when it becomes a casualty (GDD §8.2, USoldierData::CasualtyStress). */
+	void ApplyCasualtyStress();
 
 	/** Server-owned: an enemy soldier currently has line of sight to this one. */
 	bool bSpottedByEnemy = false;
@@ -992,6 +1068,14 @@ private:
 	ESoldierStance Stance = ESoldierStance::Standing;
 	bool bInjured = false;
 	bool bDead = false;
+
+	/** GDD §5.1: seconds left before an untreated injury kills (replicated for the HUD). */
+	float BleedOutRemaining = 0.f;
+	/** Server: the hit that injured this soldier, credited if it bleeds out. */
+	TWeakObjectPtr<const ASoldier> InjuredBy;
+	FKillCause InjuryCause;
+	/** Server: counts the bleed-out timer down and kills the soldier when it runs out. */
+	void UpdateBleedOut(float DeltaSeconds);
 
 	TWeakObjectPtr<APlayerState> OwningPlayer;
 	float StunRemaining = 0.f;
@@ -1078,6 +1162,12 @@ private:
 	bool bModelTintedAsCorpse = false;
 	float TracerRemaining = 0.f;
 	FRandomStream Rng;
+
+	// Projectile model (SoldierBallistics.cpp).
+	/** Server: recoil building up from rounds fired (mrad), recovering over time. */
+	float RecoilMrad = 0.f;
+	void FillBallisticChance(const ASoldier& Target, FHitChanceInfo& Info) const;
+	void FireBallisticRound(ASoldier* Target, const FHitChanceInfo& Chance);
 
 	// Dragging: the soldier this one is pulling, and the one pulling this one.
 	TWeakObjectPtr<ASoldier> DraggedSoldier;

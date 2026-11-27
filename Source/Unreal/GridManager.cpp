@@ -40,11 +40,8 @@ AGridManager::AGridManager()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneMesh(TEXT("/Engine/BasicShapes/Plane.Plane"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ShapeMaterial(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	static ConstructorHelpers::FObjectFinder<UCoverData> DefaultCoverData(TEXT("/Game/Data/DA_CoverTuning.DA_CoverTuning"));
-	if (DefaultCoverData.Succeeded())
-	{
-		CoverData = DefaultCoverData.Object;
-	}
+	// CoverData stays unset: GetCoverData() falls back to the UCoverData class defaults (the GDD values). No
+	// DA_CoverTuning asset exists, and looking one up here logged an error that failed every packaging cook.
 
 	// Flat ground: a thin box whose top face sits at the actor's Z.
 	Ground = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Ground"));

@@ -1,0 +1,292 @@
+{
+	"map": "Farmstead",
+	"seed": 5013,
+	"ballistics": false,
+	"squads_per_team": 1,
+	"duration_s": 57.533336639404297,
+	"reason": "annihilation",
+	"winner": "Allies",
+	"score":
+	{
+		"Allies": 17,
+		"Axis": 0
+	},
+	"kill_points":
+	{
+		"Allies": 16,
+		"Axis": 0
+	},
+	"vp_points":
+	{
+		"Allies": 1.7,
+		"Axis": 0
+	},
+	"vp_owners":
+	{
+		"A": "neutral",
+		"B": "Allies",
+		"C": "Allies"
+	},
+	"teams": [
+		{
+			"team": "Allies",
+			"grenades_thrown": 0,
+			"blast_kills": 0,
+			"blast_stuns": 0,
+			"friendly_blast_casualties": 0,
+			"vp_captures": 2
+		},
+		{
+			"team": "Axis",
+			"grenades_thrown": 1,
+			"blast_kills": 0,
+			"blast_stuns": 0,
+			"friendly_blast_casualties": 0,
+			"vp_captures": 0
+		}
+	],
+	"soldiers": [
+		{
+			"id": "Allies-S1-4",
+			"team": "Allies",
+			"squad": 1,
+			"number": 4,
+			"weapon": "M1 Garand",
+			"rounds_fired": 0,
+			"hits": 0,
+			"kills": 0,
+			"grenade_kills": 0,
+			"hits_taken": 0,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 1,
+			"death_time": -1,
+			"death_cause": "",
+			"end_state": "active",
+			"rounds_left": 70,
+			"grenades_left": 5,
+			"medkits_left": 0,
+			"peak_stress": 20,
+			"stress_tier_seconds": [
+				57.5,
+				0,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Allies-S1-1",
+			"team": "Allies",
+			"squad": 1,
+			"number": 1,
+			"weapon": "M1 Garand",
+			"rounds_fired": 6,
+			"hits": 2,
+			"kills": 1,
+			"grenade_kills": 0,
+			"hits_taken": 0,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": -1,
+			"death_cause": "",
+			"end_state": "active",
+			"rounds_left": 64,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 20,
+			"stress_tier_seconds": [
+				57.5,
+				0,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Allies-S1-2",
+			"team": "Allies",
+			"squad": 1,
+			"number": 2,
+			"weapon": "M1 Garand",
+			"rounds_fired": 2,
+			"hits": 2,
+			"kills": 2,
+			"grenade_kills": 0,
+			"hits_taken": 0,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": -1,
+			"death_cause": "",
+			"end_state": "active",
+			"rounds_left": 68,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 0,
+			"stress_tier_seconds": [
+				57.5,
+				0,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Allies-S1-3",
+			"team": "Allies",
+			"squad": 1,
+			"number": 3,
+			"weapon": "M1 Garand",
+			"rounds_fired": 1,
+			"hits": 1,
+			"kills": 1,
+			"grenade_kills": 0,
+			"hits_taken": 1,
+			"times_injured": 1,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": -1,
+			"death_cause": "",
+			"end_state": "active",
+			"rounds_left": 69,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 21.633327484130859,
+			"stress_tier_seconds": [
+				57.5,
+				0,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Axis-S1-4",
+			"team": "Axis",
+			"squad": 1,
+			"number": 4,
+			"weapon": "Gewehr 43",
+			"rounds_fired": 2,
+			"hits": 1,
+			"kills": 0,
+			"grenade_kills": 0,
+			"hits_taken": 1,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": 57.500003814697266,
+			"death_cause": "rifle",
+			"end_state": "dead",
+			"rounds_left": 68,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 34.233371734619141,
+			"stress_tier_seconds": [
+				55.5,
+				2,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Axis-S1-1",
+			"team": "Axis",
+			"squad": 1,
+			"number": 1,
+			"weapon": "Gewehr 43",
+			"rounds_fired": 2,
+			"hits": 0,
+			"kills": 0,
+			"grenade_kills": 0,
+			"hits_taken": 2,
+			"times_injured": 1,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": 30.733335494995117,
+			"death_cause": "rifle",
+			"end_state": "dead",
+			"rounds_left": 68,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 40.000007629394531,
+			"stress_tier_seconds": [
+				29,
+				1.5,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Axis-S1-2",
+			"team": "Axis",
+			"squad": 1,
+			"number": 2,
+			"weapon": "Gewehr 43",
+			"rounds_fired": 0,
+			"hits": 0,
+			"kills": 0,
+			"grenade_kills": 0,
+			"hits_taken": 1,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 1,
+			"medkits_given": 0,
+			"death_time": 29.233335494995117,
+			"death_cause": "rifle",
+			"end_state": "dead",
+			"rounds_left": 70,
+			"grenades_left": 4,
+			"medkits_left": 1,
+			"peak_stress": 0,
+			"stress_tier_seconds": [
+				29,
+				0,
+				0,
+				0
+			]
+		},
+		{
+			"id": "Axis-S1-3",
+			"team": "Axis",
+			"squad": 1,
+			"number": 3,
+			"weapon": "Gewehr 43",
+			"rounds_fired": 0,
+			"hits": 0,
+			"kills": 0,
+			"grenade_kills": 0,
+			"hits_taken": 1,
+			"times_injured": 0,
+			"times_stunned": 0,
+			"grenades_thrown": 0,
+			"medkits_given": 0,
+			"death_time": 36,
+			"death_cause": "rifle",
+			"end_state": "dead",
+			"rounds_left": 70,
+			"grenades_left": 5,
+			"medkits_left": 1,
+			"peak_stress": 20,
+			"stress_tier_seconds": [
+				36,
+				0,
+				0,
+				0
+			]
+		}
+	],
+	"events": [
+		"22.9 grenade Axis-S1-2 throws 5.0m",
+		"23.8 capture B by Allies",
+		"29.2 death Axis-S1-2 by Allies-S1-2 (rifle, 55.0%)",
+		"30.7 death Axis-S1-1 by Allies-S1-1 (rifle, 65.0%)",
+		"36.0 death Axis-S1-3 by Allies-S1-3 (rifle, 85.0%)",
+		"40.1 capture C by Allies",
+		"53.7 medkit Allies-S1-4 treats Allies-S1-3",
+		"57.5 death Axis-S1-4 by Allies-S1-2 (rifle, 85.0%)"
+	]
+}

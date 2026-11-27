@@ -111,6 +111,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid|Cover")
 	TObjectPtr<UCoverData> CoverData;
 
+	/** GDD §3.5: this map's match time limit in seconds, after which the match is decided on points (0: the game mode's default, 20 minutes). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "0"))
+	float MatchTimeLimit = 0.f;
+
 	/** Square drawn on the cell under the mouse cursor. */
 	UPROPERTY(VisibleAnywhere, Category = "Grid")
 	TObjectPtr<UStaticMeshComponent> HoverHighlight;

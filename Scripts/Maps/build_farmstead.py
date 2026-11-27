@@ -1,4 +1,8 @@
 """
+OUT OF DATE - do not run on the live level. The level was hand-edited after this script and then made
+symmetric by Scripts/Maps/mirror_farmstead.py (GDD v0.55, §10.5). Running this would put back the old layout,
+which favoured the south side in AI test matches (31-2). Kept for reference.
+
 Builds /Game/Maps/Farmstead: a placeholder 64x64 farm map (2v2 size, GDD §10.1).
 
 Run from the Unreal Editor console (Cmd):  py Scripts/Maps/build_farmstead.py

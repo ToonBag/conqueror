@@ -21,6 +21,7 @@ param(
     [switch]$ServerOnly,
     [switch]$Stop,
     [string[]]$ServerArgs = @(),   # extra server arguments, e.g. "-ini:Engine:[ConsoleVariables]:squad.SquadsPerTeam=4"
+    [string[]]$ExtraClientArgs = @(),   # extra client arguments, e.g. "-ResX=1600" or "-ini:Engine:[ConsoleVariables]:squad.RevealAll=1"
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -56,6 +57,7 @@ if (-not $ServerOnly) {
         $clientArgs = @("`"$Project`"", "127.0.0.1:$Port", "-game", "-windowed", "-ResX=960", "-ResY=540", "-WinX=$x", "-WinY=60",
             "-log", "-nosplash", "-abslog=`"$(Join-Path $PSScriptRoot "..\Saved\Logs\LocalMP_Client$i.log")`"")
         if ($Lag) { $clientArgs += @("-ExecCmds=`"Net PktLag=45, Net PktLagVariance=15, Net PktLoss=1`"") }
+        $clientArgs += $ExtraClientArgs
         $client = Start-Process $Editor -PassThru -ArgumentList $clientArgs
         $started += $client.Id
         "Client$i pid $($client.Id)"

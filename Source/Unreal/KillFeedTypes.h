@@ -60,4 +60,8 @@ struct FKillFeedEntry
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Kill Feed")
 	float ChancePercent = 0.f;
+
+	/** GDD §5.1: the victim bled out from an untreated injury; the rest describes the hit that injured it. */
+	UPROPERTY(BlueprintReadOnly, Category = "Kill Feed")
+	bool bBledOut = false;
 };

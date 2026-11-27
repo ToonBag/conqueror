@@ -1,4 +1,6 @@
 #include "Soldier.h"
+#include "Ballistics.h"
+#include "BallisticsData.h"
 
 #include "BreachableWall.h"
 #include "Grenade.h"
@@ -8,6 +10,7 @@
 #include "SoldierData.h"
 #include "SoldierVisualData.h"
 #include "SquadGameState.h"
+#include "SquadGameMode.h"
 #include "SquadMatchStats.h"
 #include "SquadPlayerController.h"
 #include "SquadPlayerState.h"
@@ -21,6 +24,7 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
@@ -35,6 +39,78 @@ namespace
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarSimultaneousShots(
+		TEXT("squad.SimultaneousShots"),
+		1,
+		TEXT("1 = rolled hits take effect once every soldier has had its turn in the server tick, so two soldiers firing ")
+		TEXT("in the same tick both land their shots (GDD §5.3). 0 = a hit takes effect at once, so whichever soldier the ")
+		TEXT("server updates first can kill the other before it fires (old behaviour, for comparison)."));
+
+	/** A rolled hit waiting for the end of the server tick (squad.SimultaneousShots). */
+	struct FPendingHit
+	{
+		TWeakObjectPtr<UWorld> World;
+		TWeakObjectPtr<ASoldier> Target;
+		TWeakObjectPtr<const ASoldier> Shooter;
+		FKillCause Cause; // Killer is filled from Shooter when applied.
+		float DistanceMetres = 0.f;
+		TWeakObjectPtr<USquadMatchStats> Stats;
+		int32 StatsRow = INDEX_NONE;
+	};
+	TArray<FPendingHit> PendingHits;
+	FDelegateHandle PendingHitsHandle;
+
+	void ApplyHit(ASoldier& Target, float DistanceMetres, const FKillCause& Cause, USquadMatchStats* Stats, int32 StatsRow)
+	{
+		const bool bWasDead = Target.IsDead();
+		const bool bWasInjured = Target.IsInjured();
+		Target.ReceiveHit(DistanceMetres, Cause);
+		if (Stats)
+		{
+			const FString Outcome = bWasDead ? TEXT("none") : Target.IsDead() ? TEXT("killed")
+				: (Target.IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none");
+			if (StatsRow == INDEX_NONE)
+			{
+				Stats->RecordHitOutcome(Outcome);
+			}
+			else
+			{
+				Stats->RecordHitOutcomeAt(StatsRow, Outcome);
+			}
+		}
+	}
+
+	/** After every actor has ticked: apply this world's queued hits, in the order they were fired. */
+	void FlushPendingHits(UWorld* World, ELevelTick, float)
+	{
+		if (PendingHits.Num() == 0)
+		{
+			return;
+		}
+		TArray<FPendingHit> Due;
+		for (int32 i = 0; i < PendingHits.Num();)
+		{
+			if (!PendingHits[i].World.IsValid() || PendingHits[i].World.Get() == World)
+			{
+				Due.Add(PendingHits[i]);
+				PendingHits.RemoveAt(i);
+			}
+			else
+			{
+				++i;
+			}
+		}
+		for (const FPendingHit& Hit : Due)
+		{
+			if (ASoldier* Target = Hit.Target.Get())
+			{
+				FKillCause Cause = Hit.Cause;
+				Cause.Killer = Hit.Shooter.Get();
+				ApplyHit(*Target, Hit.DistanceMetres, Cause, Hit.Stats.Get(), Hit.StatsRow);
+			}
+		}
+	}
+
 	TAutoConsoleVariable<int32> CVarRevealAllSoldiers(
 		TEXT("squad.RevealAll"),
 		0,
@@ -966,6 +1042,8 @@ ESoldierStance ASoldier::GetNextStance() const
 
 // ------------------------------------------------------------------------------------------------ Damage
 
+FOnSoldierShotResolved ASoldier::OnShotResolved;
+
 void ASoldier::ReceiveHit(float DistanceMetres, const FKillCause& Cause)
 {
 	if (bDead || IsDebugInvulnerable())
@@ -981,8 +1059,36 @@ void ASoldier::ReceiveHit(float DistanceMetres, const FKillCause& Cause)
 		return;
 	}
 	bInjured = true;
+	ApplyCasualtyStress();
+	// GDD §5.1: an untreated injury kills after BleedOutTime; the death is credited to this hit.
+	BleedOutRemaining = GetSoldierData()->BleedOutTime;
+	InjuredBy = Cause.Killer;
+	InjuryCause = Cause;
+	InjuryCause.Killer = nullptr; // Held weakly in InjuredBy instead.
 	DamageFlashRemaining = DamageFlashTime;
 	ApplyPostureVisuals();
+}
+
+bool ASoldier::IsBleedOutPaused() const
+{
+	const ASoldier* Medic = MedkitTreatedBy.Get();
+	return Medic && Medic->IsApplyingMedkit() && Medic->MedkitPatient.Get() == this;
+}
+
+void ASoldier::UpdateBleedOut(float DeltaSeconds)
+{
+	if (!bInjured || bDead || BleedOutRemaining <= 0.f || IsBleedOutPaused())
+	{
+		return;
+	}
+	BleedOutRemaining = FMath::Max(0.f, BleedOutRemaining - DeltaSeconds);
+	if (BleedOutRemaining <= 0.f && !IsDebugInvulnerable())
+	{
+		FKillCause Cause = InjuryCause;
+		Cause.Killer = InjuredBy.Get();
+		Cause.bBledOut = true;
+		Die(Cause);
+	}
 }
 
 void ASoldier::ApplyStun(float Seconds)
@@ -1010,6 +1116,10 @@ void ASoldier::Die(const FKillCause& Cause)
 	}
 	if (HasAuthority())
 	{
+		if (!Cause.bBledOut)
+		{
+			ApplyCasualtyStress();
+		}
 		if (ASquadGameState* GameState = GetWorld()->GetGameState<ASquadGameState>())
 		{
 			FKillFeedEntry Entry;
@@ -1018,7 +1128,12 @@ void ASoldier::Die(const FKillCause& Cause)
 			Entry.Method = Cause.Method;
 			Entry.WeaponName = Cause.Method == EKillMethod::Rifle ? SquadLoot::WeaponName(Cause.Weapon) : FString();
 			Entry.ChancePercent = Cause.ChancePercent;
+			Entry.bBledOut = Cause.bBledOut;
 			GameState->AddKill(Entry);
+		}
+		if (ASquadGameMode* GameMode = GetWorld()->GetAuthGameMode<ASquadGameMode>())
+		{
+			GameMode->OnSoldierDied(*this); // Points for the other team (GDD §11).
 		}
 		if (USquadMatchStats* Stats = USquadMatchStats::Get(this))
 		{
@@ -1030,6 +1145,7 @@ void ASoldier::Die(const FKillCause& Cause)
 	CancelBuild();
 	bDead = true;
 	StunRemaining = 0.f;
+	BleedOutRemaining = 0.f;
 	CancelGrenadeThrow();
 	Stress = 0.f;
 	StressDecayHold = 0.f;
@@ -1110,6 +1226,26 @@ EStressTier ASoldier::GetStressTier() const
 const FStressTierEffects& ASoldier::GetStressEffects() const
 {
 	return GetSoldierData()->GetStressEffects(GetStressTier());
+}
+
+void ASoldier::ApplyCasualtyStress()
+{
+	// GDD §8.2: a squad-mate injured or killed nearby. Cover doesn't help.
+	const USoldierData* D = GetSoldierData();
+	if (!HasAuthority() || D->CasualtyStress <= 0.f)
+	{
+		return;
+	}
+	const float RadiusSq = FMath::Square(D->CasualtyStressRadius * UUPerMetre);
+	for (TActorIterator<ASoldier> It(GetWorld()); It; ++It)
+	{
+		ASoldier* Mate = *It;
+		if (Mate != this && Mate->Team == Team && Mate->SquadId == SquadId && !Mate->bDead
+			&& FVector::DistSquared2D(Mate->GetActorLocation(), GetActorLocation()) <= RadiusSq)
+		{
+			Mate->AddStress(D->CasualtyStress);
+		}
+	}
 }
 
 void ASoldier::AddStress(float Amount)
@@ -1228,6 +1364,7 @@ void ASoldier::Tick(float DeltaSeconds)
 	}
 	GrenadeCooldown = FMath::Max(0.f, GrenadeCooldown - DeltaSeconds);
 	UnderFireRemaining = FMath::Max(0.f, UnderFireRemaining - DeltaSeconds);
+	RecoilMrad = FMath::Max(0.f, RecoilMrad - UBallisticsSubsystem::GetData()->RecoilRecoveryMradPerSecond * DeltaSeconds);
 	DamageFlashRemaining = FMath::Max(0.f, DamageFlashRemaining - DeltaSeconds);
 	MessageRemaining = FMath::Max(0.f, MessageRemaining - DeltaSeconds);
 
@@ -1242,6 +1379,12 @@ void ASoldier::Tick(float DeltaSeconds)
 		return;
 	}
 
+	UpdateBleedOut(DeltaSeconds);
+	if (bDead)
+	{
+		WriteNetState(); // Bled out this tick.
+		return;
+	}
 	UpdateDrag();
 	UpdateStress(DeltaSeconds);
 	UpdateGrenadeThrow(DeltaSeconds);
@@ -1391,6 +1534,7 @@ void ASoldier::WriteNetState()
 	S.bInjured = bInjured;
 	S.bDead = bDead;
 	S.StunRemaining = StunRemaining;
+	S.BleedOutRemaining = BleedOutRemaining;
 	S.Stress = Stress;
 	S.bSpottedByEnemy = bSpottedByEnemy;
 	S.OwningPlayer = OwningPlayer.Get();
@@ -1481,6 +1625,7 @@ void ASoldier::ReadNetState()
 	bInjured = S.bInjured;
 	bDead = S.bDead;
 	StunRemaining = S.StunRemaining;
+	BleedOutRemaining = S.BleedOutRemaining;
 	Stress = S.Stress;
 	bSpottedByEnemy = S.bSpottedByEnemy;
 	OwningPlayer = S.OwningPlayer;
@@ -2366,6 +2511,8 @@ void ASoldier::RecoverFromInjury()
 	}
 	// GDD §5.2: back to Active. A further hit from beyond 5 m injures again rather than killing.
 	bInjured = false;
+	BleedOutRemaining = 0.f;
+	InjuredBy = nullptr;
 	MedkitTreatedBy = nullptr;
 	Stance = ESoldierStance::Prone; // Still on the ground; the player picks the stance from here.
 	ApplyPostureVisuals();
@@ -2446,9 +2593,9 @@ void ASoldier::UpdateAutoTarget(float DeltaSeconds)
 			continue;
 		}
 		const FHitChanceInfo Chance = GetHitChanceAgainst(Other);
-		if (!Chance.CanFire())
+		if (!Chance.CanFire() || (Chance.bBallistic && Chance.ExposurePercent <= 0.f))
 		{
-			continue;
+			continue; // GDD §16: automatic fire only at enemies some part of which shows.
 		}
 		if (Chance.FinalChance > BestChance)
 		{
@@ -2532,6 +2679,11 @@ void ASoldier::UpdateAttack(float DeltaSeconds)
 	}
 
 	const FHitChanceInfo Chance = GetHitChanceAgainst(Target);
+	if (bAutoTarget && Chance.CanFire() && Chance.bBallistic && Chance.ExposurePercent <= 0.f)
+	{
+		ClearAttack(); // GDD §16: an automatic target that ducks fully behind cover is dropped until it shows again.
+		return;
+	}
 	if (!Chance.CanFire())
 	{
 		if (!bAutoTarget) // An automatic target just drops out of sight; only explicit orders report why.
@@ -2589,6 +2741,16 @@ FString FHitChanceInfo::Describe() const
 		return TEXT("NO LINE OF SIGHT");
 	}
 	const TCHAR* StressTag = StressAccuracyMultiplier < 1.f ? TEXT(" (STRESSED)") : TEXT("");
+	if (bBallistic)
+	{
+		// e.g. "34% - 40% EXPOSED (BRACED)"
+		if (ExposurePercent <= 0.f)
+		{
+			return FString::Printf(TEXT("%.0f%% - HIDDEN%s%s"), FinalChance, bBraced ? TEXT(" (BRACED)") : TEXT(""), StressTag);
+		}
+		return FString::Printf(TEXT("%.0f%% - %.0f%% EXPOSED%s%s"), FinalChance, ExposurePercent,
+			bBraced ? TEXT(" (BRACED)") : TEXT(""), StressTag);
+	}
 	if (Cover == ECoverType::None)
 	{
 		return FString::Printf(TEXT("%.0f%% EXPOSED%s"), FinalChance, StressTag);
@@ -2629,6 +2791,12 @@ FHitChanceInfo ASoldier::GetHitChanceAgainst(const ASoldier* Target) const
 		Info.CoverReduction = Cover.Reduction;
 		Info.bCoverLeaning = Cover.bLeaning;
 		Info.FinalChance = Grid->GetCoverData()->ApplyReduction(Info.BaseChance, Cover.Reduction);
+	}
+	// GDD §16: in the projectile model the chance is estimated from sampled rounds against the target's body;
+	// the grid cover above is kept only for stress and the readout's cover name.
+	if (Info.CanFire() && UBallisticsSubsystem::IsEnabled(this))
+	{
+		FillBallisticChance(*Target, Info);
 	}
 	return Info;
 }
@@ -2776,13 +2944,20 @@ bool ASoldier::GetActivePeek(FWallPeek& OutPeek) const
 		return false;
 	}
 	// Edge is a grid step out past the wall's end; grid X/Y run along world X/Y. With both sides of a wall's end
-	// open, lean out the side the soldier is turned towards.
+	// open, lean out the side the soldier is turned towards (rifle on that shoulder); squarely facing the wall, the
+	// right (the right-shoulder default).
 	const FVector Forward = GetActorForwardVector();
+	const FVector Right = GetActorRightVector();
+	auto Score = [&Forward, &Right](const FWallPeek& Peek)
+	{
+		const FVector Edge(Peek.Edge.X, Peek.Edge.Y, 0.f);
+		const float Toward = FVector::DotProduct(Edge, Forward);
+		return (FMath::Abs(Toward) < 0.01f ? 0.f : Toward) + 0.001f * FVector::DotProduct(Edge, Right);
+	};
 	const FWallPeek* Chosen = &Peeks[0];
 	for (const FWallPeek& Peek : Peeks)
 	{
-		if (FVector::DotProduct(FVector(Peek.Edge.X, Peek.Edge.Y, 0.f), Forward)
-			> FVector::DotProduct(FVector(Chosen->Edge.X, Chosen->Edge.Y, 0.f), Forward) + KINDA_SMALL_NUMBER)
+		if (Score(Peek) > Score(*Chosen))
 		{
 			Chosen = &Peek;
 		}
@@ -2859,6 +3034,12 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 	++ShotCount;
 	++RoundsFiredStat;
 
+	if (UBallisticsSubsystem::IsEnabled(this))
+	{
+		FireBallisticRound(Target, Chance); // GDD §16: a projectile instead of a roll.
+		return;
+	}
+
 	// GDD §5.3: roll 0..100,000 inclusive; hit if roll <= hit chance (0.001% resolution).
 	const int32 Roll = Rng.RandRange(0, 100000);
 	const int32 Threshold = FMath::RoundToInt(Chance.FinalChance * 1000.f);
@@ -2903,10 +3084,11 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 	}
 	MulticastShot(Muzzle, Impact, bHit); // Tracer and gunshot on every machine.
 
-	// GDD §8.2: every round fired at a soldier stresses it, hit or miss; cover reduces that (§9).
+	// GDD §8.2: every round fired at a soldier stresses it, hit or miss, scaled by the weapon (§6.2); cover reduces
+	// that (§9).
 	const USoldierData* D = GetSoldierData();
 	const float CoverFactor = FMath::Clamp(1.f - Chance.CoverReduction / 100.f * D->CoverStressReductionScale, 0.f, 1.f);
-	Target->AddStress(Target->GetSoldierData()->StressPerIncomingShot * CoverFactor);
+	Target->AddStress(Target->GetSoldierData()->StressPerIncomingShot * GetWeaponData()->StressScale * CoverFactor);
 	Target->UnderFireRemaining = UnderFireTime;
 	ApplyCrossfireStress(Target);
 
@@ -2918,14 +3100,38 @@ void ASoldier::FireAt(ASoldier* Target, const FHitChanceInfo& Chance)
 		Cause.Method = EKillMethod::Rifle;
 		Cause.Weapon = GetWeaponData();
 		Cause.ChancePercent = Chance.FinalChance;
-		const bool bWasDead = Target->IsDead();
-		const bool bWasInjured = Target->IsInjured();
-		Target->ReceiveHit(DistanceMetres, Cause);
-		if (Stats)
+		if (CVarSimultaneousShots.GetValueOnGameThread() != 0)
 		{
-			Stats->RecordHitOutcome(bWasDead ? TEXT("none") : Target->IsDead() ? TEXT("killed")
-				: (Target->IsInjured() && !bWasInjured) ? TEXT("injured") : TEXT("none"));
+			// GDD §5.3: shots fired in the same server tick land together, whatever order the soldiers tick in.
+			if (!PendingHitsHandle.IsValid())
+			{
+				PendingHitsHandle = FWorldDelegates::OnWorldPostActorTick.AddStatic(&FlushPendingHits);
+			}
+			FPendingHit& Hit = PendingHits.AddDefaulted_GetRef();
+			Hit.World = GetWorld();
+			Hit.Target = Target;
+			Hit.Shooter = this;
+			Hit.Cause = Cause;
+			Hit.Cause.Killer = nullptr;
+			Hit.DistanceMetres = DistanceMetres;
+			Hit.Stats = Stats;
+			Hit.StatsRow = Stats ? Stats->TakePendingOutcomeRow() : INDEX_NONE;
 		}
+		else
+		{
+			ApplyHit(*Target, DistanceMetres, Cause, Stats, INDEX_NONE);
+		}
+	}
+	if (OnShotResolved.IsBound())
+	{
+		FSoldierShotReport Report;
+		Report.Shooter = this;
+		Report.Target = Target;
+		Report.Victim = bHit ? Target : nullptr;
+		Report.bHitTarget = bHit;
+		Report.Chance = Chance;
+		Report.Outcome = bHit ? TEXT("hit") : TEXT("miss");
+		OnShotResolved.Broadcast(Report);
 	}
 }
 
@@ -3262,7 +3468,8 @@ void ASoldier::UpdateStatusLabel()
 	}
 	else if (bInjured)
 	{
-		Text = TEXT("INJURED - CRAWLING");
+		Text = BleedOutRemaining > 0.f ? FString::Printf(TEXT("INJURED - BLEEDING %ds"), FMath::CeilToInt(BleedOutRemaining))
+			: FString(TEXT("INJURED - CRAWLING"));
 		Color = FColor(255, 60, 60);
 	}
 	else

@@ -17,6 +17,7 @@ enum class ESquadDebugAction : uint8
 	BotDebug,
 	GodMode,
 	VPWinTime,
+	MatchTime,
 	// World.
 	/** Param = time dilation. */
 	GameSpeed,

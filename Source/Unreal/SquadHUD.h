@@ -171,6 +171,9 @@ private:
 	/** Top centre: which team holds every VP and the time left on the VP win timer; centre: the match result (GDD §11). */
 	void DrawMatchStatus(ASquadPlayerController& PC);
 
+	/** After a failed join (e.g. an out-of-date build): why, over the offline map the engine fell back to. */
+	void DrawJoinError();
+
 	/**
 	 * Minimap (GDD §13), bottom left: cover, victory points, deployment zones, the camera's view, the player's
 	 * soldiers with facing cones, allied soldiers and visible enemies. Turned so the player's own deployment

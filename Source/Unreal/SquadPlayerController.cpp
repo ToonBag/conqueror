@@ -165,6 +165,13 @@ void ASquadPlayerController::PlayerTick(float DeltaTime)
 		Call();
 	}
 
+	// Start the camera over this player's own squad once it is known (the map's player start is on the Allied side).
+	if (!bCameraOnOwnSquad && IsLocalController() && GetPawn() && Squad.Num() > 0)
+	{
+		CentreCameraOnSquadNumber(1);
+		bCameraOnOwnSquad = true;
+	}
+
 	// Real (undilated) time: the camera keeps its speed when the debug menu slows or speeds up the game.
 	HandleCamera(FApp::GetDeltaTime());
 	PruneSelection();
@@ -401,6 +408,7 @@ void ASquadPlayerController::OnRep_PlayerTeam()
 {
 	GatherSquad();
 	SelectBySquadNumber(1);
+	bCameraOnOwnSquad = false; // Team or squad arrived: PlayerTick moves the camera to it.
 }
 
 bool ASquadPlayerController::HandleMinimapMouse()

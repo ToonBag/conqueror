@@ -13,6 +13,8 @@ namespace
 		switch (Clip)
 		{
 		case ESoldierClip::StandFire: case ESoldierClip::CrouchFire: case ESoldierClip::ProneFire:
+		case ESoldierClip::PeekFireRightStand: case ESoldierClip::PeekFireLeftStand:
+		case ESoldierClip::PeekFireRightCrouch: case ESoldierClip::PeekFireLeftCrouch:
 		case ESoldierClip::StandReload: case ESoldierClip::CrouchReload: case ESoldierClip::ProneReload:
 		case ESoldierClip::ThrowStand: case ESoldierClip::ThrowCrouch: case ESoldierClip::ThrowProne:
 		case ESoldierClip::ThrowStepBackStand: case ESoldierClip::ThrowStepBackCrouch: case ESoldierClip::ThrowStepBackProne:
@@ -34,6 +36,13 @@ namespace
 		case ESoldierStance::Crouched: return To == ESoldierStance::Standing ? ESoldierClip::CrouchToStand : ESoldierClip::CrouchToProne;
 		default:                       return To == ESoldierStance::Crouched ? ESoldierClip::ProneToCrouch : ESoldierClip::ProneToStand;
 		}
+	}
+
+	/** GDD §9.2: leaning out past a wall's edge, +1 right shoulder / -1 left shoulder (mirrored), 0 not leaning out. */
+	int32 PeekSideOf(const ASoldier& Soldier, ESoldierStance Stance)
+	{
+		const ECoverType Cover = Stance != ESoldierStance::Prone ? Soldier.GetLeaningCoverType() : ECoverType::None;
+		return Cover == ECoverType::WallCorner || Cover == ECoverType::Tree ? Soldier.GetPeekSide() : 0;
 	}
 
 	constexpr int32 MaxLayers = 4;
@@ -256,7 +265,7 @@ ESoldierClip USoldierAnimInstance::ChooseBaseClip(const ASoldier& Soldier, ESold
 			{
 				return bCrouched ? ESoldierClip::CoverLowCrouch : ESoldierClip::CoverLowStand;
 			}
-			const int32 PeekSide = Soldier.GetPeekSide();
+			const int32 PeekSide = PeekSideOf(Soldier, Stance);
 			if (PeekSide != 0)
 			{
 				return PeekSide > 0 ? (bCrouched ? ESoldierClip::PeekRightCrouch : ESoldierClip::PeekRightStand)
@@ -354,7 +363,13 @@ void USoldierAnimInstance::UpdateAction(const ASoldier& Soldier, ESoldierStance 
 	// instead of the rifle's fire clip, which would restart up to 20 times a second.
 	if (bNewShot && !bDowned && !Soldier.HasSetupWeapon() && Action != EAction::Throw && Action != EAction::StepBack && Action != EAction::Reload)
 	{
-		StartAction(EAction::Fire, PerStance(Stance, ESoldierClip::StandFire, ESoldierClip::CrouchFire, ESoldierClip::ProneFire), Visuals->FireBlend);
+		// Leaning out past a wall's edge the recoil plays on the shoulder the rifle is on (left when mirrored).
+		const int32 PeekSide = PeekSideOf(Soldier, Stance);
+		const bool bCrouched = Stance == ESoldierStance::Crouched;
+		const ESoldierClip FireClip = PeekSide > 0 ? (bCrouched ? ESoldierClip::PeekFireRightCrouch : ESoldierClip::PeekFireRightStand)
+			: PeekSide < 0 ? (bCrouched ? ESoldierClip::PeekFireLeftCrouch : ESoldierClip::PeekFireLeftStand)
+			: PerStance(Stance, ESoldierClip::StandFire, ESoldierClip::CrouchFire, ESoldierClip::ProneFire);
+		StartAction(EAction::Fire, FireClip, Visuals->FireBlend);
 	}
 
 	// Stance change ordered while standing still (not one forced by a stun or injury).
@@ -391,7 +406,7 @@ void USoldierAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		{
 			ClipCache[i] = Visuals->GetClip(static_cast<ESoldierClip>(i));
 		}
-		LastStance = Soldier->GetEffectiveStance();
+		LastStance = Soldier->GetPostureStance();
 	}
 
 	// Ground speed drives the movement clips' play rate so feet keep pace with the grid movement.
@@ -404,7 +419,7 @@ void USoldierAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	LastLocation = Location;
 	bHasLastLocation = true;
 
-	const ESoldierStance Stance = Soldier->GetEffectiveStance();
+	const ESoldierStance Stance = Soldier->GetPostureStance();
 
 	if (Soldier->IsDead())
 	{

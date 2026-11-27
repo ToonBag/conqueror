@@ -29,6 +29,8 @@ enum class ESoldierClip : uint8
 	ThrowStepBackStand, ThrowStepBackCrouch, ThrowStepBackProne,
 	/** The throw after a step back: starts with the grenade in hand, pin out; releases at ThrowReleaseTime. */
 	ThrowArmedStand, ThrowArmedCrouch, ThrowArmedProne,
+	/** Recoil while leaning out past a wall's edge; the Left clips are mirrored (rifle on the left shoulder). */
+	PeekFireRightStand, PeekFireLeftStand, PeekFireRightCrouch, PeekFireLeftCrouch,
 	Num UMETA(Hidden)
 };
 

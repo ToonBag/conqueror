@@ -2,6 +2,7 @@
 
 #include "Soldier.h"
 #include "VictoryPoint.h"
+#include "SquadGameState.h"
 #include "WeaponData.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
@@ -134,7 +135,9 @@ void USquadMatchStats::OnMatchStarted(int32 Seed, int32 SquadsPerTeam)
 	Soldiers.Reset();
 	ShotRows.Reset();
 	Events.Reset();
-	ShotRows.Add(TEXT("time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,hit,outcome"));
+	TrackRows.Reset();
+	TrackRows.Add(TEXT("time,soldier,team,x,y,stance,moving,leaning_on_cover,spotted,under_fire,state"));
+	ShotRows.Add(TEXT("time,shooter,shooter_team,shooter_weapon,shooter_stance,shooter_stress,target,target_stance,target_moving,distance_m,base_chance,stress_mult,cover,cover_reduction,cover_leaning,final_chance,roll,shooter_x,shooter_y,target_x,target_y,shooter_braced,target_injured,exposure_pct,hit_part,hit,outcome"));
 	for (TActorIterator<ASoldier> It(World); It; ++It)
 	{
 		Find(**It);
@@ -148,10 +151,11 @@ void USquadMatchStats::Tick(float DeltaTime)
 	{
 		return;
 	}
-	// Stress tiers, sampled every half second (GDD §8.1).
+	// Stress tiers (GDD §8.1) and the position track, sampled every half second.
 	SampleAccumulator += DeltaTime;
 	if (SampleAccumulator >= 0.5f)
 	{
+		const float Now = MatchTime();
 		for (FSoldierRecord& R : Soldiers)
 		{
 			const ASoldier* S = R.Soldier.Get();
@@ -159,6 +163,11 @@ void USquadMatchStats::Tick(float DeltaTime)
 			{
 				R.TierSeconds[static_cast<int32>(S->GetStressTier())] += SampleAccumulator;
 				R.PeakStress = FMath::Max(R.PeakStress, S->GetStress());
+				const FIntPoint Cell = S->GetCurrentCell();
+				const TCHAR* State = S->IsInjured() ? TEXT("injured") : S->IsDowned() ? TEXT("stunned") : TEXT("active");
+				TrackRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%d,%d,%s,%d,%d,%d,%d,%s"), Now, *R.Id, TeamName(R.Team), Cell.X, Cell.Y,
+					StanceName(S->GetEffectiveStance()), S->IsMoving() ? 1 : 0, S->IsLeaningOnCover() ? 1 : 0,
+					S->IsSpottedByEnemy() ? 1 : 0, S->IsUnderFire() ? 1 : 0, State));
 			}
 		}
 		SampleAccumulator = 0.f;
@@ -170,25 +179,80 @@ void USquadMatchStats::Tick(float DeltaTime)
 	}
 }
 
-void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit)
+void USquadMatchStats::RecordShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, float Roll, bool bHit, const TCHAR* HitPart,
+	const FShotTargetSnapshot* TargetBefore)
 {
+	FShotTargetSnapshot Now;
+	Now.Stance = Target.GetEffectiveStance();
+	Now.bMoving = Target.IsMoving();
+	Now.bInjured = Target.IsInjured();
+	const FShotTargetSnapshot& T = TargetBefore ? *TargetBefore : Now;
 	if (bWritten)
 	{
 		return;
 	}
 	const UEnum* CoverEnum = StaticEnum<ECoverType>();
-	ShotRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%s,%s,%.1f,%s,%s,%d,%.2f,%.3f,%.3f,%s,%.1f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,"),
+	ShotRows.Add(FString::Printf(TEXT("%.2f,%s,%s,%s,%s,%.1f,%s,%s,%d,%.2f,%.3f,%.3f,%s,%.1f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.1f,%s,%d,"),
 		MatchTime(), *SoldierId(Shooter), TeamName(Shooter.Team), *WeaponName(Shooter), StanceName(Shooter.GetEffectiveStance()),
-		Shooter.GetStress(), *SoldierId(Target), StanceName(Target.GetEffectiveStance()), Target.IsMoving() ? 1 : 0,
+		Shooter.GetStress(), *SoldierId(Target), StanceName(T.Stance), T.bMoving ? 1 : 0,
 		Chance.DistanceMetres, Chance.BaseChance, Chance.StressAccuracyMultiplier,
 		CoverEnum ? *CoverEnum->GetNameStringByValue(static_cast<int64>(Chance.Cover)) : TEXT("?"),
 		Chance.CoverReduction, Chance.bCoverLeaning ? 1 : 0, Chance.FinalChance, Roll,
-		Shooter.GetCurrentCell().X, Shooter.GetCurrentCell().Y, Target.GetCurrentCell().X, Target.GetCurrentCell().Y, bHit ? 1 : 0));
+		Shooter.GetCurrentCell().X, Shooter.GetCurrentCell().Y, Target.GetCurrentCell().X, Target.GetCurrentCell().Y,
+		Chance.bBraced ? 1 : 0, T.bInjured ? 1 : 0, Chance.bBallistic ? Chance.ExposurePercent : -1.f, HitPart, bHit ? 1 : 0));
 	PendingOutcomeRow = bHit ? ShotRows.Num() - 1 : INDEX_NONE;
 	if (bHit)
 	{
 		Find(Target).HitsTaken++;
 	}
+}
+
+void USquadMatchStats::RecordBallisticShot(const ASoldier& Shooter, const ASoldier& Target, const FHitChanceInfo& Chance, bool bHitTarget,
+	EHitPart Part, const FString& Outcome, const FShotTargetSnapshot& TargetBefore)
+{
+	if (bWritten)
+	{
+		return;
+	}
+	bBallisticsMatch = true;
+	RecordShot(Shooter, Target, Chance, -1.f, bHitTarget, bHitTarget ? GetHitPartName(Part) : TEXT(""), &TargetBefore);
+	ShotRows.Last() += Outcome;
+	PendingOutcomeRow = INDEX_NONE;
+	const int32 T = TeamIdx(Shooter.Team);
+	if (bHitTarget)
+	{
+		HitParts[T][static_cast<int32>(Part)]++;
+	}
+	else if (Outcome == TEXT("miss_cover"))
+	{
+		RoundsStoppedByCover[T]++;
+	}
+}
+
+void USquadMatchStats::RecordStrayHit(const ASoldier& Shooter, const ASoldier& Victim, bool bFriendly, float DistanceMetres, const FString& Effect)
+{
+	if (bWritten)
+	{
+		return;
+	}
+	const int32 T = TeamIdx(Shooter.Team);
+	FSoldierRecord& V = Find(Victim);
+	V.HitsTaken++;
+	if (Effect == TEXT("injured"))
+	{
+		V.TimesInjured++;
+	}
+	if (bFriendly)
+	{
+		FriendlyFireHits[T]++;
+		FriendlyFireInjuries[T] += Effect == TEXT("injured") ? 1 : 0;
+	}
+	else
+	{
+		StrayEnemyHits[T]++;
+	}
+	Events.Add(FString::Printf(TEXT("%.1f %s %s hits %s at %.1fm: %s"), MatchTime(), bFriendly ? TEXT("friendly_fire") : TEXT("stray_round"),
+		*SoldierId(Shooter), *SoldierId(Victim), DistanceMetres, *Effect));
 }
 
 void USquadMatchStats::RecordHitOutcome(const FString& Outcome)
@@ -198,6 +262,14 @@ void USquadMatchStats::RecordHitOutcome(const FString& Outcome)
 		ShotRows[PendingOutcomeRow] += Outcome;
 	}
 	PendingOutcomeRow = INDEX_NONE;
+}
+
+void USquadMatchStats::RecordHitOutcomeAt(int32 Row, const FString& Outcome)
+{
+	if (ShotRows.IsValidIndex(Row))
+	{
+		ShotRows[Row] += Outcome;
+	}
 }
 
 void USquadMatchStats::RecordGrenadeThrown(const ASoldier& Thrower, FIntPoint From, FIntPoint Target)
@@ -220,7 +292,7 @@ void USquadMatchStats::RecordDeath(const ASoldier& Victim, const FKillCause& Cau
 	}
 	FSoldierRecord& V = Find(Victim);
 	V.DeathTime = MatchTime();
-	V.DeathCause = MethodName(Cause.Method);
+	V.DeathCause = Cause.bBledOut ? TEXT("bled_out") : MethodName(Cause.Method);
 	FString KillerId = TEXT("none");
 	if (const ASoldier* Killer = Cause.Killer)
 	{
@@ -235,7 +307,8 @@ void USquadMatchStats::RecordDeath(const ASoldier& Victim, const FKillCause& Cau
 			}
 		}
 	}
-	Events.Add(FString::Printf(TEXT("%.1f death %s by %s (%s, %.1f%%)"), MatchTime(), *V.Id, *KillerId, MethodName(Cause.Method), Cause.ChancePercent));
+	Events.Add(FString::Printf(TEXT("%.1f death %s by %s (%s, %.1f%%)"), MatchTime(), *V.Id, *KillerId,
+		Cause.bBledOut ? TEXT("bled_out") : MethodName(Cause.Method), Cause.ChancePercent));
 }
 
 void USquadMatchStats::RecordBlastVictim(const ASoldier* Instigator, EKillMethod Method, const ASoldier& Victim, const TCHAR* Effect)
@@ -323,10 +396,28 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("map"), World ? World->GetMapName() : FString());
 	Root->SetNumberField(TEXT("seed"), MatchSeed);
+	Root->SetBoolField(TEXT("ballistics"), bBallisticsMatch);
 	Root->SetNumberField(TEXT("squads_per_team"), NumSquadsPerTeam);
 	Root->SetNumberField(TEXT("duration_s"), MatchTime());
 	Root->SetStringField(TEXT("reason"), Reason);
-	Root->SetStringField(TEXT("winner"), Reason == TEXT("draw") || Reason == TEXT("timeout") ? TEXT("none") : TeamName(Winner));
+	Root->SetStringField(TEXT("winner"), Reason == TEXT("draw") || Reason == TEXT("time_draw") || Reason == TEXT("timeout") ? TEXT("none") : TeamName(Winner));
+
+	// Points (GDD §11), per team.
+	if (const ASquadGameState* GS = World ? World->GetGameState<ASquadGameState>() : nullptr)
+	{
+		TSharedRef<FJsonObject> Score = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> KillPts = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> VPPts = MakeShared<FJsonObject>();
+		for (const ESquadTeam Team : { ESquadTeam::Allies, ESquadTeam::Axis })
+		{
+			Score->SetNumberField(TeamName(Team), GS->GetScore(Team));
+			KillPts->SetNumberField(TeamName(Team), GS->GetKillPoints(Team));
+			VPPts->SetNumberField(TeamName(Team), FMath::RoundToDouble(static_cast<double>(GS->GetVPPoints(Team)) * 10.0) / 10.0);
+		}
+		Root->SetObjectField(TEXT("score"), Score);
+		Root->SetObjectField(TEXT("kill_points"), KillPts);
+		Root->SetObjectField(TEXT("vp_points"), VPPts);
+	}
 
 	// VP owners at the end.
 	TSharedRef<FJsonObject> VPs = MakeShared<FJsonObject>();
@@ -350,6 +441,19 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 		J->SetNumberField(TEXT("blast_stuns"), BlastStuns[T]);
 		J->SetNumberField(TEXT("friendly_blast_casualties"), FriendlyBlastCasualties[T]);
 		J->SetNumberField(TEXT("vp_captures"), VPCaptures[T]);
+		if (bBallisticsMatch)
+		{
+			J->SetNumberField(TEXT("friendly_fire_hits"), FriendlyFireHits[T]);
+			J->SetNumberField(TEXT("friendly_fire_injuries"), FriendlyFireInjuries[T]);
+			J->SetNumberField(TEXT("stray_enemy_hits"), StrayEnemyHits[T]);
+			J->SetNumberField(TEXT("rounds_stopped_by_cover"), RoundsStoppedByCover[T]);
+			TSharedRef<FJsonObject> Parts = MakeShared<FJsonObject>();
+			for (int32 P = 0; P < 6; ++P)
+			{
+				Parts->SetNumberField(GetHitPartName(static_cast<EHitPart>(P)), HitParts[T][P]);
+			}
+			J->SetObjectField(TEXT("target_hit_parts"), Parts);
+		}
 		TeamArray.Add(MakeShared<FJsonValueObject>(J));
 	}
 	Root->SetArrayField(TEXT("teams"), TeamArray);
@@ -409,7 +513,8 @@ void USquadMatchStats::WriteFiles(ESquadTeam Winner, const FString& Reason)
 	const FString Dir = FPaths::ProjectSavedDir() / TEXT("MatchStats");
 	const FString Base = Dir / FString::Printf(TEXT("%s_seed%d"), *StartStamp, MatchSeed);
 	const bool bJson = FFileHelper::SaveStringToFile(Json, *(Base + TEXT(".json")));
-	const bool bCsv = FFileHelper::SaveStringArrayToFile(ShotRows, *(Base + TEXT("_shots.csv")));
+	const bool bCsv = FFileHelper::SaveStringArrayToFile(ShotRows, *(Base + TEXT("_shots.csv")))
+		&& FFileHelper::SaveStringArrayToFile(TrackRows, *(Base + TEXT("_track.csv")));
 	UE_LOG(LogSquadStats, Log, TEXT("MATCH STATS: %s, %.0f s, %d shots -> %s.json%s"), *Reason, MatchTime(), ShotRows.Num() - 1, *Base,
 		bJson && bCsv ? TEXT("") : TEXT(" (WRITE FAILED)"));
 }

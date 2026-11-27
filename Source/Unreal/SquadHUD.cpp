@@ -4,6 +4,7 @@
 #include "Soldier.h"
 #include "SoldierData.h"
 #include "SquadGameState.h"
+#include "SquadJoinError.h"
 #include "SquadPlayerController.h"
 #include "MapZoneColors.h"
 #include "WeaponData.h"
@@ -90,6 +91,46 @@ void ASquadHUD::DrawHUD()
 	DrawAudioControls(*PC);
 	DrawMatchStatus(*PC); // On top of everything...
 	DrawDebugMenu(*PC); // ...but the debug menu.
+	DrawJoinError();
+}
+
+void ASquadHUD::DrawJoinError()
+{
+	// Only on the local map the engine falls back to after a failed join; a connected client has joined fine.
+	const USquadJoinError* JoinError = GetNetMode() == NM_Standalone ? USquadJoinError::Get(this) : nullptr;
+	if (!JoinError || JoinError->GetMessage().IsEmpty())
+	{
+		return;
+	}
+	UFont* Font = GEngine ? GEngine->GetLargeFont() : nullptr;
+	UFont* Small = GEngine ? GEngine->GetSmallFont() : nullptr;
+	const float S = FMath::Clamp(Canvas->ClipY / 1080.f, 0.9f, 1.5f);
+	TArray<FString> Lines;
+	JoinError->GetMessage().ParseIntoArray(Lines, TEXT(". "));
+	Lines.Insert(TEXT("NOT CONNECTED: this is an offline copy of the map."), 0);
+
+	float BoxW = 0.f;
+	for (int32 i = 0; i < Lines.Num(); ++i)
+	{
+		float TW = 0.f, TH = 0.f;
+		GetTextSize(Lines[i], TW, TH, i == 0 ? Font : Small, i == 0 ? S : 1.2f * S);
+		BoxW = FMath::Max(BoxW, TW);
+	}
+	BoxW += 40.f * S;
+	const float LineH = 26.f * S;
+	const float BoxH = 24.f * S + LineH * Lines.Num();
+	const float X0 = (Canvas->ClipX - BoxW) * 0.5f;
+	const float Y0 = Canvas->ClipY * 0.3f;
+	DrawRect(FLinearColor(0.08f, 0.01f, 0.01f, 0.85f), X0, Y0, BoxW, BoxH);
+	for (int32 i = 0; i < Lines.Num(); ++i)
+	{
+		float TW = 0.f, TH = 0.f;
+		UFont* LineFont = i == 0 ? Font : Small;
+		const float Scale = i == 0 ? S : 1.2f * S;
+		GetTextSize(Lines[i], TW, TH, LineFont, Scale);
+		DrawText(Lines[i], i == 0 ? FLinearColor(1.f, 0.45f, 0.35f) : FLinearColor(0.95f, 0.93f, 0.9f),
+			(Canvas->ClipX - TW) * 0.5f, Y0 + 12.f * S + LineH * i, LineFont, Scale);
+	}
 }
 
 bool ASquadHUD::IsOverSquadBar(const FVector2D& ScreenPosition) const
@@ -426,7 +467,13 @@ void ASquadHUD::DrawSquadCard(const ASoldier& Soldier, float X, float Y, float W
 	switch (Health)
 	{
 	case ESoldierHealth::Stunned: Accent = Warn;   HealthText = FString::Printf(TEXT("STUNNED %.1fs"), Soldier.GetStunRemaining()); break;
-	case ESoldierHealth::Injured: Accent = Danger; HealthText = TEXT("INJURED"); break;
+	case ESoldierHealth::Injured:
+		Accent = Danger;
+		// GDD §5.1: seconds until it bleeds out ("paused" while a medic is applying a medkit).
+		HealthText = Soldier.GetBleedOutRemaining() <= 0.f ? FString(TEXT("INJURED"))
+			: Soldier.IsBleedOutPaused() ? FString::Printf(TEXT("INJURED %ds (MEDIC)"), FMath::CeilToInt(Soldier.GetBleedOutRemaining()))
+			: FString::Printf(TEXT("BLEEDING %ds"), FMath::CeilToInt(Soldier.GetBleedOutRemaining()));
+		break;
 	case ESoldierHealth::Dead:    Accent = Dim;    HealthText = TEXT("KIA"); break;
 	default: break;
 	}
@@ -748,7 +795,11 @@ void ASquadHUD::DrawKillFeed(ASquadPlayerController& PC)
 		const FString VictimRank = RankLine(E.Victim);
 		const FString Chance = ChanceLabel(E.ChancePercent);
 		const bool bGrenade = E.Method != EKillMethod::Rifle; // Grenades and C4 (GDD §7.2) share the explosive icon.
-		const FString WeaponLabel = E.Method == EKillMethod::C4 ? FString(TEXT("C4")) : bGrenade ? FString(TEXT("Grenade")) : E.WeaponName;
+		FString WeaponLabel = E.Method == EKillMethod::C4 ? FString(TEXT("C4")) : bGrenade ? FString(TEXT("Grenade")) : E.WeaponName;
+		if (E.bBledOut)
+		{
+			WeaponLabel = WeaponLabel.IsEmpty() ? FString(TEXT("Bled out")) : FString::Printf(TEXT("%s - bled out"), *WeaponLabel);
+		}
 
 		// Column widths (pixels).
 		const float KillerW = FMath::Max(Measure(KillerRank, 0.85f).X, Measure(E.Killer.Name, 1.1f).X);
@@ -1166,7 +1217,48 @@ void ASquadHUD::DrawMatchStatus(ASquadPlayerController& PC)
 	};
 	const TCHAR* const Teams[] = { TEXT("ALLIES"), TEXT("AXIS") };
 
-	// ---- VP hold timer.
+	// ---- Score bar (GDD §11): Allied points left, Axis right, the bar split by share, the match clock between.
+	const int32 AlliedScore = GS->GetScore(ESquadTeam::Allies);
+	const int32 AxisScore = GS->GetScore(ESquadTeam::Axis);
+	float BarBottom = 0.f;
+	{
+		const float BarW = 360.f * S;
+		const float BarH = 8.f * S;
+		const float X0 = (Canvas->ClipX - BarW) * 0.5f;
+		const float Y0 = 12.f * S;
+		const float BoxH = 34.f * S;
+		const FLinearColor AlliedColor = MapZoneColors::ForTeam(ESquadTeam::Allies);
+		const FLinearColor AxisColor = MapZoneColors::ForTeam(ESquadTeam::Axis);
+		DrawRect(FLinearColor(0.02f, 0.025f, 0.02f, 0.6f), X0, Y0, BarW, BoxH);
+
+		// Scores at the ends; your own team's in brighter text.
+		const FLinearColor Mine(1.f, 1.f, 1.f), Theirs(0.75f, 0.75f, 0.72f);
+		const FString AlliedStr = FString::Printf(TEXT("ALLIES  %d"), AlliedScore);
+		const FString AxisStr = FString::Printf(TEXT("%d  AXIS"), AxisScore);
+		float TW = 0.f, TH = 0.f;
+		const float TextY = Y0 + 4.f * S;
+		DrawText(AlliedStr, PC.PlayerTeam == ESquadTeam::Allies ? Mine : Theirs, X0 + 8.f * S, TextY, Small, 1.1f * S);
+		GetTextSize(AxisStr, TW, TH, Small, 1.1f * S);
+		DrawText(AxisStr, PC.PlayerTeam == ESquadTeam::Axis ? Mine : Theirs, X0 + BarW - 8.f * S - TW, TextY, Small, 1.1f * S);
+
+		if (GS->HasMatchTimeLimit())
+		{
+			const int32 Secs = FMath::CeilToInt(GS->GetMatchTimeRemaining());
+			DrawCentred(FString::Printf(TEXT("%d:%02d"), Secs / 60, Secs % 60),
+				Secs <= 60 ? FLinearColor(1.f, 0.75f, 0.35f) : FLinearColor(0.92f, 0.92f, 0.9f), TextY, Small, 1.1f * S);
+		}
+
+		// Tug of war: half each at 0-0.
+		const int32 Total = AlliedScore + AxisScore;
+		const float AlliedShare = Total > 0 ? static_cast<float>(AlliedScore) / Total : 0.5f;
+		const float BarY = Y0 + BoxH - BarH;
+		DrawRect(AlliedColor, X0, BarY, BarW * AlliedShare, BarH);
+		DrawRect(AxisColor, X0 + BarW * AlliedShare, BarY, BarW * (1.f - AlliedShare), BarH);
+		DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.8f), X0 + BarW * 0.5f - 1.f * S, BarY - 2.f * S, 2.f * S, BarH + 2.f * S); // Midpoint.
+		BarBottom = Y0 + BoxH;
+	}
+
+	// ---- VP hold timer, under the score bar.
 	if (GS->IsVPHeld() && !GS->IsMatchOver())
 	{
 		const int32 Secs = FMath::CeilToInt(GS->GetVPHoldRemaining());
@@ -1175,7 +1267,7 @@ void ASquadHUD::DrawMatchStatus(ASquadPlayerController& PC)
 		float TW = 0.f, TH = 0.f;
 		GetTextSize(Str, TW, TH, Small, 1.2f * S);
 		const float Pad = 10.f * S;
-		const float Y = 12.f * S;
+		const float Y = BarBottom + 6.f * S;
 		const FLinearColor TeamColor = MapZoneColors::ForTeam(GS->GetVPHoldingTeam());
 		DrawRect(FLinearColor(0.02f, 0.025f, 0.02f, 0.6f), (Canvas->ClipX - TW) * 0.5f - Pad, Y, TW + Pad * 2.f, TH + Pad);
 		DrawRect(TeamColor, (Canvas->ClipX - TW) * 0.5f - Pad, Y + TH + Pad - 2.f * S, TW + Pad * 2.f, 2.f * S);
@@ -1189,20 +1281,33 @@ void ASquadHUD::DrawMatchStatus(ASquadPlayerController& PC)
 		return;
 	}
 	const EVictoryReason Reason = GS->GetVictoryReason();
-	const bool bDraw = Reason == EVictoryReason::Draw;
+	const bool bDraw = GS->IsDraw();
 	const bool bWon = !bDraw && GS->GetWinningTeam() == PC.PlayerTeam;
 	const FString Title = bDraw ? TEXT("DRAW") : (bWon ? TEXT("VICTORY") : TEXT("DEFEAT"));
-	const FString Sub = bDraw
-		? FString(TEXT("Both squads wiped out"))
-		: FString::Printf(TEXT("%s win - %s"), Teams[static_cast<int32>(GS->GetWinningTeam())],
-			Reason == EVictoryReason::Annihilation ? TEXT("enemy squad annihilated") : TEXT("held every Victory Point"));
+	const TCHAR* WinnerName = Teams[static_cast<int32>(GS->GetWinningTeam())];
+	FString Sub;
+	switch (Reason)
+	{
+	case EVictoryReason::Draw:          Sub = TEXT("Both squads wiped out"); break;
+	case EVictoryReason::TimeDraw:      Sub = FString::Printf(TEXT("Time up - points level %d : %d"), AlliedScore, AxisScore); break;
+	case EVictoryReason::Annihilation:  Sub = FString::Printf(TEXT("%s win - enemy squad annihilated"), WinnerName); break;
+	case EVictoryReason::Points:
+		Sub = FString::Printf(TEXT("Time up - %s win %d : %d"), WinnerName, FMath::Max(AlliedScore, AxisScore), FMath::Min(AlliedScore, AxisScore));
+		break;
+	default:                            Sub = FString::Printf(TEXT("%s win - held every Victory Point"), WinnerName); break;
+	}
+	// Allies / Axis, whatever ended the match.
+	const FString Breakdown = FString::Printf(TEXT("ALLIES %d  (kill points %d, VP points %d)      AXIS %d  (kill points %d, VP points %d)"),
+		AlliedScore, FMath::RoundToInt(GS->GetKillPoints(ESquadTeam::Allies)), FMath::FloorToInt(GS->GetVPPoints(ESquadTeam::Allies)),
+		AxisScore, FMath::RoundToInt(GS->GetKillPoints(ESquadTeam::Axis)), FMath::FloorToInt(GS->GetVPPoints(ESquadTeam::Axis)));
 	const FLinearColor BannerColor = bDraw ? FLinearColor(0.9f, 0.9f, 0.85f) : (bWon ? FLinearColor(1.f, 0.85f, 0.4f) : FLinearColor(1.f, 0.32f, 0.27f));
 
-	const float BandH = 150.f * S;
+	const float BandH = 180.f * S;
 	const float BandY = Canvas->ClipY * 0.32f;
 	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.65f), 0.f, BandY, Canvas->ClipX, BandH);
 	DrawRect(BannerColor * FLinearColor(1.f, 1.f, 1.f, 0.8f), 0.f, BandY, Canvas->ClipX, 2.f * S);
 	DrawRect(BannerColor * FLinearColor(1.f, 1.f, 1.f, 0.8f), 0.f, BandY + BandH - 2.f * S, Canvas->ClipX, 2.f * S);
 	DrawCentred(Title, BannerColor, BandY + 22.f * S, Font, 2.6f * S);
 	DrawCentred(Sub, FLinearColor(0.92f, 0.92f, 0.9f), BandY + 100.f * S, Small, 1.3f * S);
+	DrawCentred(Breakdown, FLinearColor(0.75f, 0.75f, 0.72f), BandY + 135.f * S, Small, 1.1f * S);
 }

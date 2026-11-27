@@ -13,6 +13,9 @@
   ./Scripts/AIMatchBatch.ps1 -Matches 20 -Parallel 4  # more, four at a time
   ./Scripts/AIMatchBatch.ps1 -SquadsPerTeam 1         # 1v1 squads
   ./Scripts/AIMatchBatch.ps1 -SwapSides               # Axis start south, Allies north (map-bias test)
+  ./Scripts/AIMatchBatch.ps1 -Rolls                  # the older hit-chance rolls (projectile combat is the default, GDD §16)
+  ./Scripts/AIMatchBatch.ps1 -PointsTimeLimit 1200     # real match time limit: decided on points at 20 min (GDD §11)
+  ./Scripts/AIMatchBatch.ps1 -Tuning "StressPerIncomingShot=12;SettleTime=1"   # trial tuning values
 #>
 param(
     [int]$Matches = 10,
@@ -20,8 +23,11 @@ param(
     [int]$Parallel = 3,
     [int]$SeedBase = 1000,
     [int]$TimeLimit = 2400,      # game seconds before a match is recorded as a timeout
+    [int]$PointsTimeLimit = 0,   # squad.MatchTime: decide matches on points after this many game seconds (GDD §11); 0: no time limit, as in earlier reviews
     [switch]$SwapSides,          # each faction starts in the other's deployment zone (map-bias test)
+    [switch]$Rolls,              # squad.Ballistics 0: the older hit-chance rolls instead of projectile combat (GDD §5.3, §16)
     [string]$Map = "/Game/Maps/Farmstead",
+    [string]$Tuning = "",        # squad.TuningOverrides: 'Prop=Value;Prop=Value' on the data assets (balancing trials)
     [int]$BasePort = 17800,
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8"
 )
@@ -39,7 +45,9 @@ function Start-Match([int]$i) {
         "-benchmark", "-fps=30", "-log", "-abslog=`"$(Join-Path $LogDir "AIMatch_$seed.log")`"",
         "${cv}squad.SquadsPerTeam=$SquadsPerTeam", "${cv}squad.MinPlayers=0", "${cv}squad.MatchStats=1",
         "${cv}squad.QuitAfterMatch=1", "${cv}squad.MatchSeed=$seed", "${cv}squad.MatchTimeLimit=$TimeLimit",
-        "${cv}squad.SwapSides=$([int][bool]$SwapSides)")
+        "${cv}squad.MatchTime=$(if ($PointsTimeLimit -gt 0) { $PointsTimeLimit } else { -1 })",
+        "${cv}squad.SwapSides=$([int][bool]$SwapSides)", "${cv}squad.Ballistics=$([int](-not $Rolls))")
+    if ($Tuning) { $argv += "`"${cv}squad.TuningOverrides=$Tuning`"" }
     $p = Start-Process $Editor -PassThru -WindowStyle Hidden -ArgumentList $argv
     Write-Host "match $i  seed $seed  pid $($p.Id)"
     return $p

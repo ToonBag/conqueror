@@ -36,3 +36,9 @@ __pycache__/
 # Local tool state
 .Aura/
 .claude/settings.local.json
+
+# Packaged playtest builds (Scripts/Playtest/PackageClient.ps1)
+/Playtest/
+# Cloud playtest config written by Scripts/Playtest/CloudSetup.ps1 (names your Google Cloud project)
+/Scripts/Playtest/cloud.json
+/Build/Windows/FileOpenOrder/
